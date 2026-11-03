@@ -377,8 +377,9 @@ class TvActivity : AppCompatActivity() {
             "${config.name}'s signature doesn't match its code, so it can't be added"
         }
         // A replacement keeps the installed source's login, so it must come from the same signer.
+        // Copying the key is not enough: the new script must be signed by it.
         val installed = StatePlugins.instance.getPlugin(config.id)?.config?.scriptPublicKey
-        require(installed.isNullOrEmpty() || installed == config.scriptPublicKey) {
+        require(installed.isNullOrEmpty() || (installed == config.scriptPublicKey && config.validate(script))) {
             "This would replace your ${config.name} source with one from a different author, so it was refused"
         }
         return config to script
@@ -406,7 +407,10 @@ class TvActivity : AppCompatActivity() {
         view.findViewById<TextView>(R.id.plugin_author).text =
             getString(if (official) R.string.tv_plugin_by else R.string.tv_plugin_claims, author, config.version)
         val icon = view.findViewById<ImageView>(R.id.plugin_icon)
-        config.absoluteIconUrl?.let { Glide.with(this).load(it).into(icon) } ?: run { icon.visibility = View.GONE }
+        config.absoluteIconUrl?.let { Glide.with(this).load(it).into(icon) } ?: run {
+            icon.visibility = View.GONE
+            (view.findViewById<View>(R.id.plugin_title).parent as View).let { (it.layoutParams as ViewGroup.MarginLayoutParams).marginStart = 0 }
+        }
 
         val details = view.findViewById<LinearLayout>(R.id.plugin_details)
         fun line(text: String, color: Int = R.color.tv_muted, bold: Boolean = false, top: Int = 10) {
@@ -420,7 +424,6 @@ class TvActivity : AppCompatActivity() {
         }
         line(getString(if (official) R.string.tv_plugin_official else R.string.tv_plugin_third_party), R.color.white, bold = true, top = 0)
         StatePlugins.instance.getPlugin(config.id)?.let { line(getString(R.string.tv_plugin_replaces, it.config.name)) }
-        if (config.description.isNotBlank()) line(config.description)
         for ((title, body) in config.getWarnings(script)) {
             line(title, R.color.tv_warn, bold = true, top = 16)
             line(body, top = 4)
@@ -434,6 +437,9 @@ class TvActivity : AppCompatActivity() {
                 line(if (hosts.size > 6) "$shown " + getString(R.string.tv_plugin_access_more, hosts.size - 6) else shown, top = 4)
             }
         }
+
+        // Last: the author's own words, so they can never push the warnings out of view.
+        if (config.description.isNotBlank()) line(config.description, top = 16)
 
         val cancel = view.findViewById<View>(R.id.plugin_cancel)
         cancel.setOnClickListener { dialog.dismiss() }

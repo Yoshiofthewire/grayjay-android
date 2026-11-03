@@ -158,7 +158,8 @@ class TvRowsAdapter(private val ctx: TvRowsContext, private val header: View? = 
         private fun start(row: TvRow) {
             val load = row.load ?: return
             row.started = true
-            ctx.scope.launch {
+            // Always dispatch: never notify the adapter from inside a bind or layout pass.
+            ctx.scope.launch(Dispatchers.Main) {
                 try {
                     val result = withContext(Dispatchers.IO) {
                         when (val r = load()) {
@@ -186,7 +187,11 @@ class TvRowsAdapter(private val ctx: TvRowsContext, private val header: View? = 
                 }
                 ctx.onRowLoaded(row)
                 val i = rows.indexOf(row)
-                if (i >= 0) notifyItemChanged(i + offset)
+                if (i < 0) return@launch
+                // A shelf with nothing to show (e.g. all its videos are in the mixed row) drops out.
+                if (row.state == TvRow.State.READY && row.videos.isEmpty() && row.creators == null && rows.size > 1) {
+                    rows.removeAt(i); notifyItemRemoved(i + offset)
+                } else notifyItemChanged(i + offset)
             }
         }
     }
@@ -195,7 +200,7 @@ class TvRowsAdapter(private val ctx: TvRowsContext, private val header: View? = 
         val pager = row.pager ?: return
         if (row.loadingMore || !pager.hasMorePages()) return
         row.loadingMore = true
-        ctx.scope.launch {
+        ctx.scope.launch(Dispatchers.Main) {
             try {
                 val more = withContext(Dispatchers.IO) { pager.nextPage(); pager.getResults().filter { playable(it) && it.url !in row.exclude } }
                 val start = row.videos.size

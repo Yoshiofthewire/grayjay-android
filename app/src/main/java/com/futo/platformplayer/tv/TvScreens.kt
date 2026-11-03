@@ -17,12 +17,14 @@ import com.futo.platformplayer.api.media.IPlatformClient
 import com.futo.platformplayer.api.media.models.channels.IPlatformChannel
 import com.futo.platformplayer.api.media.models.contents.IPlatformContent
 import com.futo.platformplayer.api.media.platforms.js.JSClient
+import com.futo.platformplayer.api.media.structures.IPager
 import com.futo.platformplayer.logging.Logger
 import com.futo.platformplayer.states.StateHistory
 import com.futo.platformplayer.states.StatePlatform
 import com.futo.platformplayer.states.StateSubscriptions
 import com.futo.platformplayer.toHumanNumber
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -104,35 +106,7 @@ class TvHomeScreen(act: TvActivity) : TvRowsScreen(act) {
             showMessage(string(R.string.tv_no_sources_title), string(R.string.tv_no_sources_body), string(R.string.tv_phone)) { act.openCompanion() }
             return
         }
-        val firstPages = clients.associateWith { c ->
-            act.lifecycleScope.async(Dispatchers.IO) { c.getHome().let { it to it.getResults().toList() } }
-        }
-        // A row's first load shares one request per source; only a "Try again" asks the source again.
-        suspend fun page(c: IPlatformClient, retry: Boolean) =
-            if (!retry) firstPages.getValue(c).await()
-            else withContext(Dispatchers.IO) { c.getHome().let { it to it.getResults().toList() } }
-        val mixed = clients.size > 1
-        fun lead(first: List<IPlatformContent>) = first.filter(TvRowsAdapter::playable).take(PER_SOURCE_IN_MIX)
-        var acrossAttempts = 0
-        val across = TvRow(string(R.string.tv_row_across), hero = true, load = {
-            val retry = acrossAttempts++ > 0
-            val pages = clients.mapNotNull { c -> runCatching { lead(page(c, retry).second) }.getOrNull() }
-            check(pages.isNotEmpty()) { "every source failed" }
-            interleave(pages)
-        })
-        // Shelves skip what the mixed row already shows, so nothing appears twice.
-        val shelves = clients.map { c ->
-            lateinit var row: TvRow
-            var attempts = 0
-            row = TvRow(c.name, icon = c.icon, hero = !mixed, load = {
-                val (pager, first) = page(c, attempts++ > 0)
-                if (mixed) row.exclude = lead(first).map { it.url }.toSet()
-                pager
-            })
-            row
-        }
-        // With one source the mixed row would only repeat its shelf.
-        val rows = if (clients.size == 1) shelves else listOf(across) + shelves
+        val rows = mixedSourceRows(act, string(R.string.tv_row_across), clients) { it.getHome() }
         act.lifecycleScope.launch {
             val resume = withContext(Dispatchers.IO) { runCatching { continueWatching() }.getOrDefault(listOf()) }
             showRows(if (resume.isEmpty()) rows else listOf(TvRow(string(R.string.tv_row_continue), load = { resume })) + rows)
@@ -146,8 +120,6 @@ class TvHomeScreen(act: TvActivity) : TvRowsScreen(act) {
         .take(20)
 
     companion object {
-        private const val PER_SOURCE_IN_MIX = 4
-
         /** Round-robin so no single source dominates the mixed row. */
         fun <T> interleave(lists: List<List<T>>): List<T> {
             val out = mutableListOf<T>()
@@ -223,7 +195,7 @@ class TvSubscriptionsScreen(act: TvActivity) : TvRowsScreen(act, newSince = last
 fun leadAndShelves(title: String, items: List<IPlatformContent>, chronological: Boolean): List<TvRow> {
     val groups = items.groupBy { it.id.pluginId }
     if (groups.size <= 1) return listOf(TvRow(title, hero = true, load = { items }))
-    val lead = if (chronological) items.take(LEAD_COUNT) else TvHomeScreen.interleave(groups.values.map { it.take(4) })
+    val lead = if (chronological) items.take(LEAD_COUNT) else TvHomeScreen.interleave(groups.values.map { it.take(PER_SOURCE_IN_MIX) })
     val leadUrls = lead.map { it.url }.toSet()
     val clients = StatePlatform.instance.getAvailableClients().associateBy { it.id }
     return listOf(TvRow(title, hero = true, load = { lead })) + groups.mapNotNull { (id, list) ->
@@ -234,6 +206,54 @@ fun leadAndShelves(title: String, items: List<IPlatformContent>, chronological: 
 }
 
 private const val LEAD_COUNT = 24
+
+private const val PER_SOURCE_IN_MIX = 4
+
+typealias SourcePage = Pair<IPager<IPlatformContent>, List<IPlatformContent>>
+
+/** Starts one first-page request per source. */
+fun fetchFirstPages(act: TvActivity, clients: List<IPlatformClient>, fetch: (IPlatformClient) -> IPager<IPlatformContent>) =
+    clients.associateWith { c -> act.lifecycleScope.async(Dispatchers.IO) { fetch(c).let { it to it.getResults().toList() } } }
+
+/**
+ * A mixed row of the first few videos per source, then one paging shelf per source that skips
+ * what the mixed row shows. With one source it is just that source's shelf. A row's first load
+ * shares the per-source request; only "Try again" asks the source again.
+ */
+fun mixedSourceRows(
+    act: TvActivity,
+    mixedTitle: String,
+    clients: List<IPlatformClient>,
+    firstPages: Map<IPlatformClient, Deferred<SourcePage>>? = null,
+    fetch: (IPlatformClient) -> IPager<IPlatformContent>,
+): List<TvRow> {
+    val first = firstPages ?: fetchFirstPages(act, clients, fetch)
+    suspend fun page(c: IPlatformClient, retry: Boolean): SourcePage =
+        if (!retry) first.getValue(c).await()
+        else withContext(Dispatchers.IO) { fetch(c).let { it to it.getResults().toList() } }
+    fun lead(items: List<IPlatformContent>) = items.filter(TvRowsAdapter::playable).take(PER_SOURCE_IN_MIX)
+    val mixed = clients.size > 1
+    val shown = mutableSetOf<String>() // what the mixed row actually displays
+    var mixedAttempts = 0
+    val mixedRow = TvRow(mixedTitle, hero = true, load = {
+        val retry = mixedAttempts++ > 0
+        val pages = clients.mapNotNull { c -> runCatching { lead(page(c, retry).second) }.getOrNull() }
+        check(pages.isNotEmpty()) { "every source failed" }
+        TvHomeScreen.interleave(pages).also { items -> shown.clear(); shown.addAll(items.map { it.url }) }
+    })
+    val shelves = clients.map { c ->
+        lateinit var row: TvRow
+        var attempts = 0
+        row = TvRow(c.name, icon = c.icon, hero = !mixed, load = {
+            val (pager, items) = page(c, attempts++ > 0)
+            // Before the mixed row has loaded, its lead for this source is the same first page.
+            if (mixed) row.exclude = shown.toSet().ifEmpty { lead(items).map { it.url }.toSet() }
+            pager
+        })
+        row
+    }
+    return if (mixed) listOf(mixedRow) + shelves else shelves
+}
 
 class TvSearchScreen(act: TvActivity) : TvRowsScreen(act, header = LayoutInflater.from(act).inflate(R.layout.tv_header_search, null)) {
     override val tab = TvActivity.TAB_SEARCH
@@ -260,18 +280,19 @@ class TvSearchScreen(act: TvActivity) : TvRowsScreen(act, header = LayoutInflate
         showMessage(string(R.string.tv_row_loading), keepHeader = true)
         act.lifecycleScope.launch {
             try {
-                val (creators, pager) = withContext(Dispatchers.IO) {
-                    val creators = async { runCatching { StatePlatform.instance.searchChannels(q).getResults().take(20) }.getOrDefault(listOf()) }
-                    val videos = StatePlatform.instance.search(q)
-                    creators.await() to videos
+                val clients = StatePlatform.instance.getSortedEnabledClient()
+                val firstPages = fetchFirstPages(act, clients) { StatePlatform.instance.search(q, clientIds = listOf(it.id)) }
+                val creators = withContext(Dispatchers.IO) {
+                    runCatching { StatePlatform.instance.searchChannels(q).getResults().take(20) }.getOrDefault(listOf())
                 }
+                // Wait for every source so "no results" is only said when it is true.
+                val pages = firstPages.mapValues { (_, d) -> runCatching { d.await() }.getOrNull() }
                 if (q != lastQuery) return@launch
-                val first = pager.getResults().filter(TvRowsAdapter::playable)
-                val results = when {
-                    first.isEmpty() -> listOf()
-                    // One source: a single row that keeps paging.
-                    first.map { it.id.pluginId }.distinct().size == 1 -> listOf(TvRow(string(R.string.tv_row_results), hero = true, load = { pager }))
-                    else -> leadAndShelves(string(R.string.tv_row_results), first, chronological = false)
+                val withResults = clients.filter { c -> pages[c]?.second?.any(TvRowsAdapter::playable) == true }
+                val failed = clients.filter { pages[it] == null }
+                // Each source keeps its own pager, so every shelf pages on as you scroll.
+                val results = mixedSourceRows(act, string(R.string.tv_row_results), withResults + failed, firstPages) {
+                    StatePlatform.instance.search(q, clientIds = listOf(it.id))
                 }
                 val rows = mutableListOf<TvRow>()
                 rows.addAll(results.take(1))
