@@ -47,7 +47,7 @@ abstract class TvRowsScreen(act: TvActivity, private val header: View? = null, n
     final override val view: View = LayoutInflater.from(act).inflate(R.layout.tv_screen_rows, null)
     protected val grid: VerticalGridView = view.findViewById(R.id.screen_rows)
     private val message: View = view.findViewById(R.id.screen_message)
-    protected val ctx = TvRowsContext(act.lifecycleScope, act::play, { act.openChannel(it.url) }, newSince, onRowLoaded = ::onRowLoaded)
+    protected val ctx = TvRowsContext(act.lifecycleScope, act::login, act::play, { act.openChannel(it.url) }, newSince, onRowLoaded = ::onRowLoaded)
     protected val adapter = TvRowsAdapter(ctx, header)
     private var focusOnLoad = false
 
@@ -250,7 +250,7 @@ fun mixedSourceRows(
     val shelves = clients.map { c ->
         lateinit var row: TvRow
         var attempts = 0
-        row = TvRow(c.name, icon = c.icon, hero = !mixed, load = {
+        row = TvRow(c.name, icon = c.icon, hero = !mixed, clientId = c.id, load = {
             val (pager, items) = page(c, attempts++ > 0)
             // Before the mixed row has loaded, its lead for this source is the same first page.
             if (mixed) row.exclude = shown.get().ifEmpty { lead(items).map { it.url }.toSet() }

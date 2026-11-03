@@ -42,6 +42,8 @@ class TvRow(
     val showSource: Boolean = icon == null,
     val creators: List<TvCreator>? = null,
     val load: (suspend () -> Any)? = null,
+    /** The source this shelf shows, so a shelf that needs a login can offer one. */
+    val clientId: String? = null,
 ) {
     enum class State { LOADING, READY, FAILED }
 
@@ -69,6 +71,8 @@ class TvRow(
 /** Shared knobs the rows need from their screen. */
 class TvRowsContext(
     val scope: CoroutineScope,
+    /** Opens the source's login; null where logging in isn't offered. */
+    val onLogin: ((clientId: String) -> Unit)? = null,
     val onVideo: (IPlatformContent, TvRow) -> Unit,
     val onCreator: (TvCreator) -> Unit,
     /** Items newer than this get the "new" dot until they are focused once. */
@@ -130,7 +134,9 @@ class TvRowsAdapter(private val ctx: TvRowsContext, private val header: View? = 
 
             bound = row
             val adapter = when {
-                row.state == TvRow.State.FAILED -> RetryAdapter { retry(row) }
+                row.state == TvRow.State.FAILED && row.needsLogin && row.clientId != null && ctx.onLogin != null ->
+                    RetryAdapter(R.string.tv_log_in) { ctx.onLogin.invoke(row.clientId) }
+                row.state == TvRow.State.FAILED -> RetryAdapter(R.string.tv_retry) { retry(row) }
                 row.creators != null -> CreatorAdapter(row.creators, ctx)
                 else -> VideoAdapter(row, ctx, this@TvRowsAdapter)
             }
@@ -155,7 +161,11 @@ class TvRowsAdapter(private val ctx: TvRowsContext, private val header: View? = 
             val r = itemView.resources
             status.text = when (row.state) {
                 TvRow.State.LOADING -> r.getString(R.string.tv_row_loading)
-                TvRow.State.FAILED -> r.getString(if (row.needsLogin) R.string.tv_row_needs_login else R.string.tv_row_failed)
+                TvRow.State.FAILED -> r.getString(when {
+                    !row.needsLogin -> R.string.tv_row_failed
+                    row.clientId != null && ctx.onLogin != null -> R.string.tv_row_login
+                    else -> R.string.tv_row_needs_login
+                })
                 TvRow.State.READY -> {
                     val newCount = row.videos.count { isNew(it, ctx) }
                     when {
@@ -272,11 +282,14 @@ class TvRowsAdapter(private val ctx: TvRowsContext, private val header: View? = 
 }
 
 /** One focusable "Try again" in place of a shelf that failed to load. */
-private class RetryAdapter(private val onRetry: () -> Unit) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+private class RetryAdapter(private val label: Int, private val onRetry: () -> Unit) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
     override fun getItemCount() = 1
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) =
         object : RecyclerView.ViewHolder(LayoutInflater.from(parent.context).inflate(R.layout.tv_row_retry, parent, false)) {}
-    override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) = holder.itemView.setOnClickListener { onRetry() }
+    override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
+        (holder.itemView as TextView).setText(label)
+        holder.itemView.setOnClickListener { onRetry() }
+    }
 }
 
 private class VideoAdapter(private val row: TvRow, private val ctx: TvRowsContext, private val rows: TvRowsAdapter) :

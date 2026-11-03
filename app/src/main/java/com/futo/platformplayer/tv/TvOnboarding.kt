@@ -30,6 +30,22 @@ object TvOnboarding {
     private const val KEY_DONE = "onboarded"
     fun done(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_DONE, false)
     fun markDone(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putBoolean(KEY_DONE, true) }
+
+    /**
+     * A source installed from an unsigned bundled copy (e.g. by an earlier debug build) is replaced when
+     * the app now bundles a signed copy, even at a lower version: release builds refuse to run some
+     * unsigned sources, and the version check alone would keep the broken one.
+     */
+    fun preferSignedBundledSources(c: Context) {
+        for ((id, path) in StatePlugins.instance.getEmbeddedSources(c)) {
+            val installed = StatePlugins.instance.getPlugin(id)?.config ?: continue
+            if (!installed.scriptSignature.isNullOrEmpty()) continue
+            val bundled = StatePlugins.instance.getEmbeddedPluginConfig(c, path) ?: continue
+            if (bundled.scriptSignature.isNullOrEmpty()) continue
+            Logger.i("TvOnboarding", "Replacing unsigned ${installed.name} with the signed bundled copy")
+            StatePlugins.instance.installEmbeddedPlugin(c, path, id)
+        }
+    }
 }
 
 /** FUTO's official source list, read from plugins.grayjay.app. */

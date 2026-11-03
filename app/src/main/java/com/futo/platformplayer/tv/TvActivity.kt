@@ -22,6 +22,9 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.bumptech.glide.Glide
 import com.futo.platformplayer.R
+import com.futo.platformplayer.Settings
+import com.futo.platformplayer.activities.LoginActivity
+import android.webkit.CookieManager
 import com.futo.platformplayer.api.media.models.contents.IPlatformContent
 import com.futo.platformplayer.api.media.platforms.js.SourcePluginConfig
 import com.futo.platformplayer.api.http.ManagedHttpClient
@@ -31,7 +34,9 @@ import com.futo.platformplayer.states.StatePlatform
 import com.futo.platformplayer.states.StatePlugins
 import com.futo.platformplayer.states.StateSubscriptions
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
@@ -103,6 +108,7 @@ class TvActivity : AppCompatActivity() {
         // stays up while it runs in the background.
         rail.visibility = View.GONE
         lifecycleScope.launch {
+            withContext(Dispatchers.IO) { TvOnboarding.preferSignedBundledSources(this@TvActivity) }
             try { StatePlatform.instance.updateAvailableClients(this@TvActivity) } catch (e: Throwable) { Logger.e(TAG, "updateAvailableClients failed", e) }
             StateApp.instance.mainAppStarted(this@TvActivity)
             StateApp.instance.mainAppStartedWithExternalFiles(this@TvActivity)
@@ -228,6 +234,34 @@ class TvActivity : AppCompatActivity() {
     }
     fun openCompanion() = showTab(TAB_PHONE)
     fun focusHome() = focusContent()
+
+    /**
+     * Logs in to a source with its own login page, full screen on the TV. Typing works with the remote's
+     * keyboard or the Google TV phone app; the session cookie stays on the TV and never crosses the LAN.
+     */
+    fun login(clientId: String) {
+        val config = StatePlugins.instance.getPlugin(clientId)?.config ?: return
+        if (config.authentication == null) return
+        LoginActivity.showLogin(this, config) { auth ->
+            if (auth == null) return@showLogin
+            try {
+                StatePlugins.instance.setPluginAuth(config.id, auth)
+            } catch (e: Throwable) {
+                Logger.e(TAG, "Saving login failed", e)
+                runOnUiThread { toast(getString(R.string.tv_login_failed, config.name)) }
+                return@showLogin
+            } finally {
+                if (Settings.instance.plugins.shouldClearWebviewCookies())
+                    try { CookieManager.getInstance().removeAllCookies(null) } catch (e: Throwable) { Logger.e(TAG, "Clearing cookies failed", e) }
+            }
+            lifecycleScope.launch {
+                StatePlatform.instance.reloadClient(this@TvActivity, config.id)
+                toast(getString(R.string.tv_logged_in, config.name))
+                (tabs[TAB_HOME] as? TvHomeScreen)?.load()
+                tabs.remove(TAB_SUBSCRIPTIONS)?.onDestroyed()
+            }
+        }
+    }
     fun openSearch(query: String) {
         showTab(TAB_SEARCH)
         (tabs[TAB_SEARCH] as TvSearchScreen).search(query)

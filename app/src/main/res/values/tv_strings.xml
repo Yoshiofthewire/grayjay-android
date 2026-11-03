@@ -13,6 +13,10 @@
     <string name="tv_row_results">Top results</string>
     <string name="tv_row_videos">Videos</string>
     <string name="tv_row_loading">Loading…</string>
+    <string name="tv_row_login">Log in to see your videos</string>
+    <string name="tv_log_in">Log in</string>
+    <string name="tv_logged_in">Logged in to %1$s</string>
+    <string name="tv_login_failed">Couldn\'t save your %1$s login. Try again.</string>
     <string name="tv_row_needs_login">Needs you to log in, which the TV can\'t do yet</string>
     <string name="tv_row_failed">Couldn\'t load this source</string>
     <string name="tv_row_empty">Nothing here yet</string>

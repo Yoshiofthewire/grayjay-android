@@ -1,6 +1,6 @@
 {
     "SOURCES_EMBEDDED": {
-        "35ae969a-a7db-11ed-afa1-0242ac120002": "sources/youtube/YoutubeConfig.json",
+        "35ae969a-a7db-11ed-afa1-0242ac120002": "sources-signed/youtube/YoutubeConfig.json",
         "efee6d9a-c9b1-4fbf-89e7-7a2c3cbfe655": "sources/floatplane/FloatplaneConfig.json",
         "1c05bfc3-08b9-42d0-93d3-6d52e0fd34d8": "sources/odysee/OdyseeConfig.json",
         "2ce7b35e-d2b2-4adb-a728-a34a30d30359": "sources/rumble/RumbleConfig.json",
