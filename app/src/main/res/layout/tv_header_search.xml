@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingStart="@dimen/tv_overscan_h"
+    android:paddingTop="8dp"
+    android:paddingEnd="@dimen/tv_overscan_h"
+    android:paddingBottom="22dp">
+
+    <EditText
+        android:id="@+id/search_input"
+        style="@style/TvText"
+        android:layout_width="0dp"
+        android:layout_height="52dp"
+        android:layout_weight="1"
+        android:background="@drawable/tv_input"
+        android:drawableStart="@drawable/ic_search"
+        android:drawablePadding="14dp"
+        android:hint="@string/tv_search_hint"
+        android:imeOptions="actionSearch"
+        android:importantForAutofill="no"
+        android:inputType="text"
+        android:maxLength="200"
+        android:paddingStart="18dp"
+        android:paddingEnd="18dp"
+        android:singleLine="true"
+        android:textColorHint="@color/tv_dim"
+        android:textSize="17sp" />
+
+    <TextView
+        android:id="@+id/search_phone"
+        style="@style/TvButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:drawableStart="@drawable/ic_qr"
+        android:drawablePadding="10dp"
+        android:text="@string/tv_search_phone" />
+</LinearLayout>

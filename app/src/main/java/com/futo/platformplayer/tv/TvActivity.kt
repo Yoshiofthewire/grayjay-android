@@ -1,0 +1,412 @@
+package com.futo.platformplayer.tv
+
+import android.app.Dialog
+import android.content.Context
+import android.content.Intent
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.view.KeyEvent
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
+import android.view.inputmethod.InputMethodManager
+import android.widget.FrameLayout
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.TextView
+import androidx.activity.OnBackPressedCallback
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
+import com.bumptech.glide.Glide
+import com.futo.platformplayer.R
+import com.futo.platformplayer.api.media.models.contents.IPlatformContent
+import com.futo.platformplayer.api.media.platforms.js.SourcePluginConfig
+import com.futo.platformplayer.api.http.ManagedHttpClient
+import com.futo.platformplayer.logging.Logger
+import com.futo.platformplayer.states.StateApp
+import com.futo.platformplayer.states.StatePlatform
+import com.futo.platformplayer.states.StatePlugins
+import com.futo.platformplayer.states.StateSubscriptions
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import java.util.UUID
+
+/**
+ * Lean-back entry point for Android TV. Shares app state with the phone UI
+ * (MainActivity), but owns its own navigation, D-pad focus and player.
+ */
+class TvActivity : AppCompatActivity() {
+    private val mainId = "TV-" + UUID.randomUUID()
+    private lateinit var content: FrameLayout
+    private lateinit var rail: LinearLayout
+    private lateinit var dim: View
+    private lateinit var toastView: TextView
+    private val railItems = mutableListOf<View>()
+    private val stack = mutableListOf<TvScreen>()
+    private val tabs = mutableMapOf<Int, TvScreen>()
+    private val handler = Handler(Looper.getMainLooper())
+
+    private var companion: TvCompanionServer? = null
+    var companionLastAction: String? = null
+        private set
+
+    val currentTab: Int get() = stack.lastOrNull()?.tab ?: TAB_HOME
+
+    override fun attachBaseContext(newBase: Context?) {
+        super.attachBaseContext(StateApp.instance.getLocaleContext(newBase))
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        StateApp.instance.setGlobalContext(this, lifecycleScope, mainId)
+        StateApp.instance.mainAppStarting(this)
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.tv_activity)
+
+        runBlocking {
+            try { StatePlatform.instance.updateAvailableClients(this@TvActivity) } catch (e: Throwable) { Logger.e(TAG, "updateAvailableClients failed", e) }
+        }
+        StateApp.instance.mainAppStarted(this)
+        StateApp.instance.mainAppStartedWithExternalFiles(this)
+
+        content = findViewById(R.id.tv_content)
+        rail = findViewById(R.id.tv_rail)
+        dim = findViewById(R.id.tv_dim)
+        toastView = findViewById(R.id.tv_toast)
+
+        addRailItem(TAB_HOME, R.drawable.ic_home, R.string.tv_home)
+        addRailItem(TAB_SUBSCRIPTIONS, R.drawable.ic_subscriptions, R.string.tv_subscriptions)
+        addRailItem(TAB_SEARCH, R.drawable.ic_search, R.string.tv_search)
+        addRailItem(TAB_PHONE, R.drawable.ic_qr, R.string.tv_phone)
+
+        window.decorView.viewTreeObserver.addOnGlobalFocusChangeListener { old, now ->
+            val inRail = now != null && isInRail(now)
+            // Entering the rail from content lands on the current tab, not the nearest item.
+            if (inRail && (old == null || !isInRail(old))) railItems.firstOrNull { it.isSelected && it !== now }?.let { rail.post { it.requestFocus() } }
+            setRailOpen(inRail)
+        }
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) { override fun handleOnBackPressed() = back() })
+
+                StateSubscriptions.instance.onSubscriptionsChanged.subscribe(this) { _, _ -> tabs.remove(TAB_SUBSCRIPTIONS)?.onDestroyed() }
+
+        showTab(TAB_HOME)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // The phone link never outlives the TV app being on screen.
+        stopCompanion()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        handler.removeCallbacksAndMessages(null)
+        StateSubscriptions.instance.onSubscriptionsChanged.remove(this)
+        stack.forEach { it.onDestroyed() }
+        StateApp.instance.mainAppDestroyed(this, mainId)
+    }
+
+    // Navigation
+
+    fun showTab(tab: Int) {
+        val screen = tabs.getOrPut(tab) {
+            when (tab) {
+                TAB_SUBSCRIPTIONS -> TvSubscriptionsScreen(this)
+                TAB_SEARCH -> TvSearchScreen(this)
+                TAB_PHONE -> TvCompanionScreen(this)
+                else -> TvHomeScreen(this)
+            }
+        }
+        stack.lastOrNull()?.onHidden()
+        stack.filter { it !in tabs.values }.forEach { it.onDestroyed() }
+        stack.clear()
+        content.removeAllViews()
+        push(screen)
+    }
+
+    private fun push(screen: TvScreen) {
+        stack.lastOrNull()?.let { it.onHidden(); content.removeView(it.view) }
+        stack.add(screen)
+        (screen.view.parent as? ViewGroup)?.removeView(screen.view)
+        content.addView(screen.view)
+        railItems.forEach { it.isSelected = it.tag == screen.tab }
+        screen.onShown()
+    }
+
+    private fun back() {
+        val focusInRail = currentFocus?.let(::isInRail) == true
+        when {
+            stack.size > 1 -> {
+                val top = stack.removeAt(stack.size - 1)
+                top.onHidden(); top.onDestroyed(); content.removeView(top.view)
+                val under = stack.last()
+                content.addView(under.view)
+                under.onShown()
+                under.view.requestFocus()
+            }
+            !focusInRail -> railItems.firstOrNull { it.isSelected }?.requestFocus()
+            currentTab != TAB_HOME -> { showTab(TAB_HOME); railItems.first().requestFocus() }
+            else -> finish()
+        }
+    }
+
+    fun openChannel(url: String) { push(TvChannelScreen(this, url)); focusContent() }
+    fun openCompanion() = showTab(TAB_PHONE)
+    fun openSearch(query: String) {
+        showTab(TAB_SEARCH)
+        (tabs[TAB_SEARCH] as TvSearchScreen).search(query)
+        focusContent()
+    }
+
+    fun play(content: IPlatformContent, row: TvRow) {
+        val i = row.videos.indexOf(content)
+        TvQueue.set(if (i >= 0) row.videos.drop(i + 1).take(25) else listOf())
+        startActivity(Intent(this, TvPlayerActivity::class.java).putExtra(TvPlayerActivity.EXTRA_URL, content.url))
+    }
+
+    /** Set by navigation; the next screen content able to take focus takes it. */
+    private var focusContentPending = false
+
+    /** True when a freshly loaded screen may take focus: after navigation, or when focus is not in the rail. */
+    fun isContentFocusWanted(): Boolean = focusContentPending || currentFocus.let { it == null || !isInRail(it) }
+
+    /** Called by a screen once it moved focus into its content. */
+    fun contentFocused() { focusContentPending = false }
+
+    private fun focusContent() {
+        focusContentPending = true
+        val view = stack.lastOrNull()?.view ?: return
+        view.post { if (focusContentPending && view.requestFocus()) focusContentPending = false }
+    }
+
+    // Rail
+
+    private fun addRailItem(tab: Int, icon: Int, label: Int) {
+        val item = LayoutInflater.from(this).inflate(R.layout.tv_rail_item, rail, false)
+        item.tag = tab
+        item.contentDescription = getString(label)
+        item.findViewById<ImageView>(R.id.rail_icon).apply {
+            setImageResource(icon)
+            imageTintList = ContextCompat.getColorStateList(this@TvActivity, R.color.tv_rail_text)
+        }
+        item.findViewById<TextView>(R.id.rail_label).setText(label)
+        item.setOnClickListener { if (currentTab != tab || stack.size > 1) showTab(tab); focusContent() }
+        item.setOnKeyListener { _, keyCode, event ->
+            // Right from the rail always lands in content, even when it is still loading.
+            if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && event.action == KeyEvent.ACTION_DOWN) stack.lastOrNull()?.view?.requestFocus() ?: false else false
+        }
+        rail.addView(item)
+        railItems.add(item)
+        if (railItems.size > 1) item.nextFocusUpId = View.NO_ID
+    }
+
+    private fun isInRail(v: View): Boolean {
+        var p: View? = v
+        while (p != null) { if (p === rail) return true; p = p.parent as? View }
+        return false
+    }
+
+    private var railOpen = false
+    private fun setRailOpen(open: Boolean) {
+        if (open == railOpen) return
+        railOpen = open
+        val to = resources.getDimensionPixelSize(if (open) R.dimen.tv_rail_width_open else R.dimen.tv_rail_width)
+        rail.layoutParams = rail.layoutParams.apply { width = to }
+        railItems.forEach { it.findViewById<View>(R.id.rail_label).visibility = if (open) View.VISIBLE else View.GONE }
+        dim.animate().alpha(if (open) 1f else 0f).setDuration(180).start()
+    }
+
+    // Feedback
+
+    fun toast(text: String) {
+        toastView.text = text
+        toastView.visibility = View.VISIBLE
+        toastView.alpha = 0f
+        toastView.animate().alpha(1f).setDuration(150).start()
+        handler.removeCallbacks(hideToast)
+        handler.postDelayed(hideToast, 3500)
+    }
+    private val hideToast = Runnable { toastView.animate().alpha(0f).setDuration(200).withEndAction { toastView.visibility = View.GONE }.start() }
+
+    fun hideKeyboard(v: View) {
+        getSystemService(InputMethodManager::class.java).hideSoftInputFromWindow(v.windowToken, 0)
+    }
+
+    // Phone companion
+
+    /** Starts (or keeps) the companion server; returns the QR URL, or null without a LAN address. */
+    fun startCompanion(): String? {
+        val server = companion ?: TvCompanionServer(this, ::onCompanionRequest).also {
+            try { it.start() } catch (e: Throwable) { Logger.e(TAG, "Companion server failed to start", e); return null }
+            companion = it
+            companionLastAction = null
+            handler.postDelayed(idleCheck, IDLE_CHECK_MS)
+        }
+        return server.url ?: run { stopCompanion(); null }
+    }
+
+    fun stopCompanion() {
+        val server = companion ?: return
+        companion = null
+        handler.removeCallbacks(idleCheck)
+        Thread { server.stop() }.start()
+        railItems.firstOrNull { it.tag == TAB_PHONE }?.findViewById<View>(R.id.rail_dot)?.visibility = View.GONE
+        tabs.remove(TAB_PHONE)
+        if (!isFinishing && !isChangingConfigurations && currentTab == TAB_PHONE) showTab(TAB_HOME)
+    }
+
+    private val idleCheck = object : Runnable {
+        override fun run() {
+            val server = companion ?: return
+            if (System.currentTimeMillis() - server.lastRequestAt > IDLE_TIMEOUT_MS) {
+                stopCompanion(); toast(getString(R.string.tv_companion_stopped))
+            } else handler.postDelayed(this, IDLE_CHECK_MS)
+        }
+    }
+
+    /** Runs on a server thread; the returned text is shown on the phone. */
+    private fun onCompanionRequest(request: TvCompanionServer.Request): String {
+        val message = when (request) {
+            is TvCompanionServer.Request.Search -> onMain { openSearch(request.query); "Searching for “${request.query}” on your TV" }
+            is TvCompanionServer.Request.Follow -> {
+                require(StatePlatform.instance.hasEnabledChannelClient(request.url)) { getString(R.string.tv_follow_failed) }
+                val channel = try { StatePlatform.instance.getChannelLive(request.url) } catch (e: Throwable) {
+                    throw IllegalArgumentException(getString(R.string.tv_follow_failed))
+                }
+                onMain {
+                    if (!StateSubscriptions.instance.isSubscribed(channel)) StateSubscriptions.instance.addSubscription(channel)
+                    toast(getString(R.string.tv_followed_toast, channel.name))
+                }
+                "Following ${channel.name}"
+            }
+            is TvCompanionServer.Request.Play -> when {
+                StatePlatform.instance.hasEnabledContentClient(request.url) -> onMain {
+                    TvQueue.set(listOf())
+                    startActivity(Intent(this, TvPlayerActivity::class.java).putExtra(TvPlayerActivity.EXTRA_URL, request.url))
+                    "Playing on your TV"
+                }
+                StatePlatform.instance.hasEnabledChannelClient(request.url) -> onMain { openChannel(request.url); "Opened the channel on your TV" }
+                else -> throw IllegalArgumentException("None of your sources can open that link")
+            }
+            is TvCompanionServer.Request.InstallPlugin -> {
+                val (config, script) = fetchPlugin(request.url)
+                onMain { confirmPlugin(config, script) }
+                "Check your TV to confirm adding ${config.name}"
+            }
+        }
+        companionLastAction = message
+        runOnUiThread {
+            (tabs[TAB_PHONE] as? TvCompanionScreen)?.setStatus(message)
+            railItems.firstOrNull { it.tag == TAB_PHONE }?.findViewById<View>(R.id.rail_dot)?.visibility = View.VISIBLE
+        }
+        return message
+    }
+
+    private fun <T> onMain(block: () -> T): T {
+        val result = CompletableDeferred<T>()
+        runOnUiThread { try { result.complete(block()) } catch (e: Throwable) { result.completeExceptionally(e) } }
+        return runBlocking { result.await() }
+    }
+
+    private fun fetchPlugin(url: String): Pair<SourcePluginConfig, String> {
+        val config = try { StatePlugins.instance.requestConfig(url) } catch (e: Throwable) {
+            throw IllegalArgumentException("That link isn't a Grayjay source")
+        }
+        val resp = ManagedHttpClient().get(config.absoluteScriptUrl)
+        val script = resp.body?.string()
+        require(resp.isOk && !script.isNullOrEmpty()) { "Couldn't download ${config.name}'s script" }
+        return config to script!!
+    }
+
+    private var pluginDialog: Dialog? = null
+
+    /** The TV-side consent for code the phone asked to install. "Don't add" holds focus first. */
+    private fun confirmPlugin(config: SourcePluginConfig, script: String) {
+        pluginDialog?.dismiss()
+        val view = LayoutInflater.from(this).inflate(R.layout.tv_dialog_plugin, null)
+        val dialog = Dialog(this, android.R.style.Theme_Translucent_NoTitleBar).apply {
+            setContentView(FrameLayout(this@TvActivity).apply {
+                setBackgroundColor(0xCC000000.toInt())
+                addView(view, FrameLayout.LayoutParams(view.resources.getDimensionPixelSize(R.dimen.tv_dialog_width), ViewGroup.LayoutParams.WRAP_CONTENT, android.view.Gravity.CENTER))
+            })
+        }
+        pluginDialog = dialog
+
+        view.findViewById<TextView>(R.id.plugin_title).text = getString(R.string.tv_plugin_title, config.name)
+        view.findViewById<TextView>(R.id.plugin_author).text = getString(R.string.tv_plugin_by, config.author.ifBlank { "unknown author" }, config.version)
+        config.absoluteIconUrl?.let { Glide.with(this).load(it).into(view.findViewById<ImageView>(R.id.plugin_icon)) }
+
+        val details = view.findViewById<LinearLayout>(R.id.plugin_details)
+        fun line(text: String, color: Int = R.color.tv_muted, bold: Boolean = false, top: Int = 10) {
+            details.addView(TextView(this).apply {
+                setTextAppearance(R.style.TvText_Body)
+                this.text = text
+                setTextColor(ContextCompat.getColor(this@TvActivity, color))
+                if (bold) typeface = resources.getFont(R.font.inter_semibold)
+                setPadding(0, (top * resources.displayMetrics.density).toInt(), 0, 0)
+            })
+        }
+        line(getString(if (config.isOfficialAuthor()) R.string.tv_plugin_official else R.string.tv_plugin_third_party), R.color.white, bold = true, top = 0)
+        StatePlugins.instance.getPlugin(config.id)?.let { line(getString(R.string.tv_plugin_replaces, it.config.name)) }
+        if (config.description.isNotBlank()) line(config.description)
+        for ((title, body) in config.getWarnings(script)) {
+            line(title, R.color.tv_warn, bold = true, top = 16)
+            line(body, top = 4)
+        }
+        val hosts = config.allowUrls
+        if (hosts.isNotEmpty() && hosts.none { it == "everywhere" }) {
+            line(getString(R.string.tv_plugin_access), R.color.white, bold = true, top = 16)
+            val shown = hosts.take(6).joinToString(", ")
+            line(if (hosts.size > 6) "$shown " + getString(R.string.tv_plugin_access_more, hosts.size - 6) else shown, top = 4)
+        }
+
+        val cancel = view.findViewById<View>(R.id.plugin_cancel)
+        cancel.setOnClickListener { dialog.dismiss() }
+        view.findViewById<View>(R.id.plugin_install).setOnClickListener {
+            dialog.dismiss()
+            installPlugin(config, script)
+        }
+        dialog.setOnDismissListener { if (pluginDialog === dialog) pluginDialog = null }
+        dialog.show()
+        cancel.requestFocus()
+    }
+
+    private fun installPlugin(config: SourcePluginConfig, script: String) {
+        toast(getString(R.string.tv_plugin_installing, config.name))
+        StatePlugins.instance.installPluginBackground(this, lifecycleScope, config, script, { _, _ -> }) { ex ->
+            if (ex != null) {
+                toast(getString(R.string.tv_plugin_failed, config.name, ex.message ?: ex.javaClass.simpleName))
+                return@installPluginBackground
+            }
+            StatePlugins.instance.clearUpdateAvailable(config)
+            lifecycleScope.launch {
+                // Adding from the phone means "I want this": turn it on even if it was installed but off.
+                if (!StatePlatform.instance.isClientEnabled(config.id)) StatePlatform.instance.enableClient(listOf(config.id))
+                (tabs[TAB_HOME] as? TvHomeScreen)?.load()
+                toast(getString(R.string.tv_plugin_installed, config.name))
+                companionLastAction = "Added ${config.name}"
+                (tabs[TAB_PHONE] as? TvCompanionScreen)?.setStatus(companionLastAction)
+            }
+        }
+    }
+
+    companion object {
+        private const val TAG = "TvActivity"
+        const val TAB_HOME = 0
+        const val TAB_SUBSCRIPTIONS = 1
+        const val TAB_SEARCH = 2
+        const val TAB_PHONE = 3
+        private const val IDLE_TIMEOUT_MS = 15 * 60 * 1000L
+        private const val IDLE_CHECK_MS = 60 * 1000L
+    }
+}
+
+/** Up-next list handed from the row the viewer played from to the player. */
+object TvQueue {
+    @Volatile private var items: List<IPlatformContent> = listOf()
+    fun set(list: List<IPlatformContent>) { items = list }
+    fun take(): IPlatformContent? = synchronized(this) { items.firstOrNull()?.also { items = items.drop(1) } }
+    fun peek(): IPlatformContent? = items.firstOrNull()
+}

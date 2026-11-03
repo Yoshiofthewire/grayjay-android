@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src https: http: data:; connect-src 'self'; form-action 'none'; base-uri 'none'">
+<meta name="theme-color" content="#000000">
+<title>Grayjay on your TV</title>
+<style>
+  :root { --bg:#000; --s1:#161616; --s2:#232323; --line:#303030; --ink:#fff; --mute:#ACACAC; --blue:#2D63ED; --blue-d:#1044C8; --red:#E5554F; --green:#3FB27F; }
+  * { box-sizing:border-box; }
+  html { -webkit-text-size-adjust:100%; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.45 Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         padding:env(safe-area-inset-top) 0 calc(96px + env(safe-area-inset-bottom)); }
+  header { padding:28px 20px 8px; }
+  .tvline { display:flex; align-items:center; gap:10px; color:var(--mute); font-size:14px; }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--green); flex:none; }
+  .dot.off { background:var(--red); }
+  h1 { font-size:28px; line-height:1.15; margin:10px 0 0; font-weight:700; letter-spacing:-.01em; }
+  nav { position:sticky; top:0; z-index:2; background:var(--bg); display:flex; flex-wrap:wrap; gap:8px; padding:14px 20px; border-bottom:1px solid var(--s2); }
+  nav button { flex:1 1 40%; min-height:44px; padding:0 16px; border-radius:22px; border:1px solid var(--line); background:none; color:var(--mute); font:inherit; font-weight:600; }
+  nav button[aria-selected="true"] { background:var(--ink); border-color:var(--ink); color:#000; }
+  section { padding:20px; }
+  section[hidden] { display:none; }
+  h2 { font-size:20px; margin:0 0 6px; }
+  p.lead { color:var(--mute); margin:0 0 18px; }
+  form { display:flex; gap:8px; }
+  input { flex:1; min-width:0; min-height:48px; padding:0 14px; border-radius:10px; border:1px solid var(--line); background:var(--s1); color:var(--ink); font:inherit; }
+  input:focus { outline:2px solid var(--blue); outline-offset:1px; border-color:transparent; }
+  .btn { min-height:48px; padding:0 18px; border:0; border-radius:10px; background:var(--blue); color:#fff; font:inherit; font-weight:700; }
+  .btn:active { background:var(--blue-d); }
+  .btn.quiet { background:var(--s2); }
+  .btn[disabled] { opacity:.5; }
+  ul { list-style:none; margin:18px 0 0; padding:0; }
+  li.creator { display:flex; align-items:center; gap:14px; padding:12px 0; border-bottom:1px solid var(--s2); }
+  li.creator img, li.creator .ph { width:48px; height:48px; border-radius:50%; background:var(--s2); object-fit:cover; flex:none; }
+  li.creator .who { flex:1; min-width:0; }
+  li.creator .name { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  li.creator .host { color:var(--mute); font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .note { margin-top:16px; padding:14px; border-radius:10px; background:var(--s1); color:var(--mute); font-size:14px; }
+  .note b { color:var(--ink); }
+  .empty { color:var(--mute); padding:18px 0; }
+  #toast { position:fixed; left:16px; right:16px; bottom:calc(16px + env(safe-area-inset-bottom)); padding:14px 16px; border-radius:12px; background:var(--s2); color:var(--ink);
+           font-weight:600; transform:translateY(160%); transition:transform .25s ease-out; }
+  #toast.show { transform:none; }
+  #toast.err { background:#3a1715; }
+  #expired { padding:40px 20px; }
+  @media (prefers-reduced-motion: reduce) { #toast { transition:none; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="tvline"><span class="dot" id="dot"></span><span id="tvstatus">Connected to your TV</span></div>
+  <h1>Do the typing here.<br>Watch on the TV.</h1>
+</header>
+
+<div id="app">
+  <nav role="tablist" aria-label="Actions">
+    <button role="tab" aria-selected="true" aria-controls="t-follow" id="b-follow">Follow</button>
+    <button role="tab" aria-selected="false" aria-controls="t-search" id="b-search">Search</button>
+    <button role="tab" aria-selected="false" aria-controls="t-link" id="b-link">Send a link</button>
+    <button role="tab" aria-selected="false" aria-controls="t-source" id="b-source">Add a source</button>
+  </nav>
+
+  <section id="t-follow" role="tabpanel" aria-labelledby="b-follow">
+    <h2>Follow a creator</h2>
+    <p class="lead">Searches every source on your TV. New videos show up in Subscriptions.</p>
+    <form id="f-follow"><input id="i-follow" type="search" enterkeyhint="search" placeholder="Creator name" aria-label="Creator name" maxlength="200" autocomplete="off"><button class="btn">Find</button></form>
+    <ul id="creators" aria-live="polite"></ul>
+  </section>
+
+  <section id="t-search" role="tabpanel" aria-labelledby="b-search" hidden>
+    <h2>Search on the TV</h2>
+    <p class="lead">Results open on the TV screen.</p>
+    <form id="f-search"><input id="i-search" type="search" enterkeyhint="send" placeholder="What do you want to watch?" aria-label="Search" maxlength="200" autocomplete="off"><button class="btn">Send</button></form>
+  </section>
+
+  <section id="t-link" role="tabpanel" aria-labelledby="b-link" hidden>
+    <h2>Play a link on the TV</h2>
+    <p class="lead">Paste a video or channel link from any installed source.</p>
+    <form id="f-link"><input id="i-link" type="url" inputmode="url" enterkeyhint="send" placeholder="https://" aria-label="Video or channel link" autocomplete="off"><button class="btn">Play</button></form>
+    <div style="margin-top:10px"><button class="btn quiet" id="follow-link" type="button">Follow this channel instead</button></div>
+  </section>
+
+  <section id="t-source" role="tabpanel" aria-labelledby="b-source" hidden>
+    <h2>Add a source</h2>
+    <p class="lead">Paste the link to a Grayjay source plugin (its config URL or a vfuto:// link).</p>
+    <form id="f-source"><input id="i-source" type="url" inputmode="url" enterkeyhint="send" placeholder="https://…/config.json" aria-label="Plugin link" autocomplete="off"><button class="btn">Add</button></form>
+    <div class="note"><b>Plugins run code on your TV.</b> The TV shows who made it and what it can access, and nothing installs until you confirm there with the remote.</div>
+    <div class="note" id="sources">Loading installed sources…</div>
+  </section>
+</div>
+
+<div id="expired" hidden>
+  <h2>This code has expired</h2>
+  <p class="lead">Open “Use your phone” on the TV and scan the new code.</p>
+</div>
+
+<div id="toast" role="status" aria-live="assertive"></div>
+
+<script>
+(() => {
+  // The secret arrives in the URL fragment; keep it for reloads, then clear it from the address bar.
+  const fromHash = location.hash.slice(1);
+  if (/^[0-9a-f]{32}$/.test(fromHash)) { sessionStorage.setItem("gj", fromHash); history.replaceState(null, "", location.pathname); }
+  const token = sessionStorage.getItem("gj");
+  const $ = id => document.getElementById(id);
+
+  function expire() {
+    $("app").hidden = true; $("expired").hidden = false;
+    $("dot").classList.add("off"); $("tvstatus").textContent = "Not connected";
+  }
+  if (!token) { expire(); return; }
+
+  let toastTimer;
+  function toast(text, err) {
+    const t = $("toast"); t.textContent = text; t.classList.toggle("err", !!err); t.classList.add("show");
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 3500);
+  }
+
+  async function api(method, path, body) {
+    let res;
+    try {
+      res = await fetch(path, { method, headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+    } catch (e) {
+      $("dot").classList.add("off"); $("tvstatus").textContent = "Can't reach the TV";
+      throw new Error("Can't reach the TV. Is it still on the “Use your phone” screen?");
+    }
+    $("dot").classList.remove("off"); $("tvstatus").textContent = "Connected to your TV";
+    if (res.status === 401) { expire(); throw new Error("Code expired"); }
+    const text = await res.text();
+    if (!res.ok) throw new Error(text || "The TV couldn't do that");
+    return res.headers.get("content-type")?.includes("json") ? JSON.parse(text) : text;
+  }
+
+  async function act(btn, fn) {
+    btn.disabled = true;
+    try { await fn(); } catch (e) { toast(e.message, true); } finally { btn.disabled = false; }
+  }
+
+  // Tabs
+  const tabs = [...document.querySelectorAll('[role="tab"]')];
+  tabs.forEach(tab => tab.addEventListener("click", () => {
+    tabs.forEach(t => { const on = t === tab; t.setAttribute("aria-selected", on); $(t.getAttribute("aria-controls")).hidden = !on; });
+    $(tab.getAttribute("aria-controls")).querySelector("input")?.focus();
+  }));
+
+  function hostOf(url) { try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return ""; } }
+
+  function renderCreators(list) {
+    const ul = $("creators"); ul.replaceChildren();
+    if (!list.length) { const li = document.createElement("li"); li.className = "empty"; li.textContent = "No creators found. Try a shorter name, or add the source they post on."; ul.append(li); return; }
+    for (const c of list) {
+      const li = document.createElement("li"); li.className = "creator";
+      let pic;
+      if (c.thumbnail && /^https?:/.test(c.thumbnail)) { pic = document.createElement("img"); pic.src = c.thumbnail; pic.alt = ""; pic.loading = "lazy"; }
+      else { pic = document.createElement("span"); pic.className = "ph"; }
+      const who = document.createElement("div"); who.className = "who";
+      const name = document.createElement("div"); name.className = "name"; name.textContent = c.name;
+      const host = document.createElement("div"); host.className = "host"; host.textContent = hostOf(c.url);
+      who.append(name, host);
+      const btn = document.createElement("button"); btn.className = "btn" + (c.following ? " quiet" : ""); btn.type = "button";
+      btn.textContent = c.following ? "Following" : "Follow"; btn.disabled = c.following;
+      btn.addEventListener("click", () => act(btn, async () => {
+        toast(await api("POST", "/api/follow", { url: c.url }) || "Following " + c.name);
+        btn.textContent = "Following"; btn.classList.add("quiet");
+      }).then(() => { if (btn.textContent === "Following") btn.disabled = true; }));
+      li.append(pic, who, btn); ul.append(li);
+    }
+  }
+
+  $("f-follow").addEventListener("submit", e => {
+    e.preventDefault(); const q = $("i-follow").value.trim(); if (!q) return;
+    const btn = e.submitter || $("f-follow").querySelector("button");
+    const ul = $("creators"); ul.replaceChildren(Object.assign(document.createElement("li"), { className: "empty", textContent: "Searching your sources…" }));
+    act(btn, async () => renderCreators(await api("GET", "/api/creators?q=" + encodeURIComponent(q))));
+  });
+
+  function sender(formId, inputId, path, key, done) {
+    $(formId).addEventListener("submit", e => {
+      e.preventDefault(); const v = $(inputId).value.trim(); if (!v) return;
+      act(e.submitter || $(formId).querySelector("button"), async () => { const msg = await api("POST", path, { [key]: v }); toast(msg || done); $(inputId).value = ""; });
+    });
+  }
+  sender("f-search", "i-search", "/api/search", "query", "Search sent to your TV");
+  sender("f-link", "i-link", "/api/play", "url", "Opening on your TV");
+  sender("f-source", "i-source", "/api/plugin", "url", "Check your TV to confirm the install");
+
+  $("follow-link").addEventListener("click", e => {
+    const v = $("i-link").value.trim(); if (!v) { toast("Paste a channel link first", true); return; }
+    act(e.currentTarget, async () => { toast(await api("POST", "/api/follow", { url: v })); $("i-link").value = ""; });
+  });
+
+  api("GET", "/api/info").then(info => {
+    const names = info.sources.map(s => s.name);
+    $("sources").textContent = names.length ? "Installed: " + names.join(", ") : "No sources installed yet.";
+  }).catch(() => { $("sources").textContent = ""; $("sources").hidden = true; });
+})();
+</script>
+</body>
+</html>

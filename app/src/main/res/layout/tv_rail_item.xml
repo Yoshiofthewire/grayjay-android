@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="48dp"
+    android:layout_marginBottom="6dp"
+    android:background="@drawable/tv_rail_item"
+    android:clickable="true"
+    android:focusable="true"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingStart="16dp"
+    android:paddingEnd="16dp">
+
+    <FrameLayout
+        android:layout_width="24dp"
+        android:layout_height="24dp"
+        android:duplicateParentState="true">
+
+        <ImageView
+            android:id="@+id/rail_icon"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:contentDescription="@null"
+            android:duplicateParentState="true" />
+
+        <View
+            android:id="@+id/rail_dot"
+            android:layout_width="9dp"
+            android:layout_height="9dp"
+            android:layout_gravity="top|end"
+            android:background="@drawable/tv_new_dot"
+            android:visibility="gone" />
+    </FrameLayout>
+
+    <TextView
+        android:id="@+id/rail_label"
+        style="@style/TvText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="18dp"
+        android:duplicateParentState="true"
+        android:fontFamily="@font/inter_semibold"
+        android:singleLine="true"
+        android:textColor="@color/tv_rail_text"
+        android:textSize="15sp"
+        android:visibility="gone" />
+</LinearLayout>

@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingStart="@dimen/tv_overscan_h"
+    android:paddingEnd="@dimen/tv_overscan_h">
+
+    <FrameLayout
+        android:layout_width="264dp"
+        android:layout_height="264dp"
+        android:background="@drawable/tv_panel"
+        android:backgroundTint="@color/white"
+        android:padding="16dp">
+
+        <ImageView
+            android:id="@+id/companion_qr"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:contentDescription="@string/tv_companion_qr_desc"
+            android:scaleType="fitCenter" />
+    </FrameLayout>
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="48dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            style="@style/TvText.Display"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/tv_companion_title" />
+
+        <TextView
+            style="@style/TvText.Body"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:maxWidth="460dp"
+            android:text="@string/tv_companion_body" />
+
+        <TextView
+            android:id="@+id/companion_url"
+            style="@style/TvText.Meta"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:fontFeatureSettings="tnum"
+            android:textSize="13sp" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="28dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <View
+                android:id="@+id/companion_dot"
+                android:layout_width="10dp"
+                android:layout_height="10dp"
+                android:background="@drawable/tv_new_dot" />
+
+            <TextView
+                android:id="@+id/companion_status"
+                style="@style/TvText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:fontFamily="@font/inter_semibold"
+                android:textSize="15sp" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/companion_stop"
+            style="@style/TvButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="28dp"
+            android:text="@string/tv_companion_stop" />
+    </LinearLayout>
+</LinearLayout>

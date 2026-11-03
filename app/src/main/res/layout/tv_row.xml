@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:clipChildren="false"
+    android:clipToPadding="false"
+    android:orientation="vertical"
+    android:paddingBottom="14dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="@dimen/tv_overscan_h"
+        android:paddingEnd="@dimen/tv_overscan_h">
+
+        <ImageView
+            android:id="@+id/row_icon"
+            android:layout_width="22dp"
+            android:layout_height="22dp"
+            android:layout_marginEnd="10dp"
+            android:contentDescription="@null"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/row_title"
+            style="@style/TvText.RowTitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:singleLine="true" />
+
+        <TextView
+            android:id="@+id/row_status"
+            style="@style/TvText.Meta"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="14dp"
+            android:textSize="13sp" />
+    </LinearLayout>
+
+    <androidx.leanback.widget.HorizontalGridView
+        android:id="@+id/row_list"
+        app:focusOutFront="true"
+        app:focusOutSideStart="true"
+        app:focusOutSideEnd="true"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:paddingStart="@dimen/tv_overscan_h"
+        android:paddingTop="12dp"
+        android:paddingEnd="@dimen/tv_overscan_h"
+        android:paddingBottom="8dp" />
+</LinearLayout>

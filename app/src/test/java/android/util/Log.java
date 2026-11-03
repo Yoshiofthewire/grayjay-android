@@ -20,4 +20,11 @@ public class Log {
         System.out.println("ERROR: " + tag + ": " + msg);
         return 0;
     }
+
+    public static int v(String tag, String msg) { return d(tag, msg); }
+    public static int w(String tag, String msg, Throwable tr) { return w(tag, msg + " " + tr); }
+    public static int e(String tag, String msg, Throwable tr) { return e(tag, msg + " " + tr); }
+    public static int println(int priority, String tag, String msg) { return d(tag, msg); }
+    public static boolean isLoggable(String tag, int level) { return false; }
+    public static String getStackTraceString(Throwable tr) { return String.valueOf(tr); }
 }

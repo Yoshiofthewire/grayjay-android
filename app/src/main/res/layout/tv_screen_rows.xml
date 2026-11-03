@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <androidx.leanback.widget.VerticalGridView
+        android:id="@+id/screen_rows"
+        app:focusOutFront="true"
+        app:focusOutSideStart="true"
+        app:focusOutSideEnd="true"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:paddingTop="@dimen/tv_overscan_v"
+        android:paddingBottom="@dimen/tv_overscan_v" />
+
+    <LinearLayout
+        android:id="@+id/screen_message"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:gravity="center_horizontal"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/screen_message_title"
+            style="@style/TvText.RowTitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center" />
+
+        <TextView
+            android:id="@+id/screen_message_body"
+            style="@style/TvText.Body"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:gravity="center"
+            android:maxWidth="440dp" />
+
+        <TextView
+            android:id="@+id/screen_message_action"
+            style="@style/TvButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:visibility="gone" />
+    </LinearLayout>
+</FrameLayout>
