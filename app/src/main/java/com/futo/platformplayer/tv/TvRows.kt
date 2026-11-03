@@ -53,6 +53,10 @@ class TvRow(
     var selected = 0
     /** URLs another row already shows; set by [load] before it returns. */
     var exclude: Set<String> = emptySet()
+    /** The source had videos, but the mixed row shows all of them. */
+    var allShownElsewhere = false
+    /** The last next-page request failed; the shelf ends in a "Try again" tile. */
+    var moreFailed = false
     internal var adapter: RecyclerView.Adapter<*>? = null
 }
 
@@ -167,12 +171,8 @@ class TvRowsAdapter(private val ctx: TvRowsContext, private val header: View? = 
                                 @Suppress("UNCHECKED_CAST")
                                 val p = r as IPager<IPlatformContent>
                                 row.pager = p
-                                var items = p.getResults().filter { playable(it) && it.url !in row.exclude }
-                                // A page that was all duplicates or non-videos must not strand the shelf.
-                                var extra = 0
-                                while (items.isEmpty() && p.hasMorePages() && extra++ < 3) {
-                                    p.nextPage(); items = p.getResults().filter { playable(it) && it.url !in row.exclude }
-                                }
+                                val (items, sawPlayable) = nextVideos(p, row, fetchFirst = false)
+                                row.allShownElsewhere = items.isEmpty() && sawPlayable && !p.hasMorePages()
                                 items
                             }
                             is List<*> -> r.filterIsInstance<IPlatformContent>().filter { playable(it) && it.url !in row.exclude }
@@ -188,8 +188,8 @@ class TvRowsAdapter(private val ctx: TvRowsContext, private val header: View? = 
                 ctx.onRowLoaded(row)
                 val i = rows.indexOf(row)
                 if (i < 0) return@launch
-                // A shelf with nothing to show (e.g. all its videos are in the mixed row) drops out.
-                if (row.state == TvRow.State.READY && row.videos.isEmpty() && row.creators == null && rows.size > 1) {
+                // A shelf whose videos all sit in the mixed row drops out; a truly empty source stays and says so.
+                if (row.state == TvRow.State.READY && row.allShownElsewhere && rows.size > 1) {
                     rows.removeAt(i); notifyItemRemoved(i + offset)
                 } else notifyItemChanged(i + offset)
             }
@@ -198,19 +198,44 @@ class TvRowsAdapter(private val ctx: TvRowsContext, private val header: View? = 
 
     internal fun loadMore(row: TvRow) {
         val pager = row.pager ?: return
-        if (row.loadingMore || !pager.hasMorePages()) return
+        if (row.loadingMore || row.moreFailed || !pager.hasMorePages()) return
         row.loadingMore = true
         ctx.scope.launch(Dispatchers.Main) {
             try {
-                val more = withContext(Dispatchers.IO) { pager.nextPage(); pager.getResults().filter { playable(it) && it.url !in row.exclude } }
+                val (more, _) = withContext(Dispatchers.IO) { nextVideos(pager, row, fetchFirst = true) }
                 val start = row.videos.size
                 row.videos.addAll(more)
                 row.adapter?.notifyItemRangeInserted(start, more.size)
             } catch (e: Throwable) {
                 Logger.w(TAG, "Row '${row.title}' next page failed", e)
+                row.moreFailed = true
+                row.adapter?.notifyItemInserted(row.videos.size)
             } finally {
                 row.loadingMore = false
             }
+        }
+    }
+
+    internal fun retryMore(row: TvRow) {
+        row.moreFailed = false
+        row.adapter?.notifyItemRemoved(row.videos.size)
+        loadMore(row)
+    }
+
+    /**
+     * Returns the next playable, not-yet-shown videos, paging past pages that were all shorts,
+     * posts or duplicates. Also reports whether any playable video was seen at all.
+     */
+    private fun nextVideos(p: IPager<IPlatformContent>, row: TvRow, fetchFirst: Boolean): Pair<List<IPlatformContent>, Boolean> {
+        if (fetchFirst) p.nextPage()
+        var sawPlayable = false
+        var pages = 0
+        while (true) {
+            val page = p.getResults().filter(::playable)
+            sawPlayable = sawPlayable || page.isNotEmpty()
+            val fresh = page.filter { it.url !in row.exclude }
+            if (fresh.isNotEmpty() || !p.hasMorePages() || ++pages > MAX_SKIP_PAGES) return fresh to sawPlayable
+            p.nextPage()
         }
     }
 
@@ -218,6 +243,7 @@ class TvRowsAdapter(private val ctx: TvRowsContext, private val header: View? = 
         private const val TAG = "TvRows"
         private const val TYPE_HEADER = 0
         private const val TYPE_ROW = 1
+        private const val MAX_SKIP_PAGES = 10
 
         /** Videos and streams only; posts and articles have no TV view yet. */
         fun playable(c: IPlatformContent) = c is IPlatformVideo && !c.isShort
@@ -239,11 +265,14 @@ private class RetryAdapter(private val onRetry: () -> Unit) : RecyclerView.Adapt
 }
 
 private class VideoAdapter(private val row: TvRow, private val ctx: TvRowsContext, private val rows: TvRowsAdapter) :
-    RecyclerView.Adapter<VideoAdapter.Holder>() {
+    RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
-    override fun getItemCount() = row.videos.size
+    override fun getItemCount() = row.videos.size + if (row.moreFailed) 1 else 0
+    override fun getItemViewType(position: Int) = if (position >= row.videos.size) TYPE_RETRY else TYPE_VIDEO
 
-    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
+        if (viewType == TYPE_RETRY) return object : RecyclerView.ViewHolder(
+            LayoutInflater.from(parent.context).inflate(R.layout.tv_row_retry, parent, false)) {}
         val v = LayoutInflater.from(parent.context).inflate(R.layout.tv_card_video, parent, false)
         val w = parent.resources.getDimensionPixelSize(if (row.hero) R.dimen.tv_card_hero else R.dimen.tv_card)
         v.layoutParams = v.layoutParams.apply { width = w }
@@ -253,13 +282,19 @@ private class VideoAdapter(private val row: TvRow, private val ctx: TvRowsContex
         return Holder(v)
     }
 
-    override fun onBindViewHolder(holder: Holder, position: Int) {
+    override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
+        if (holder !is Holder) { holder.itemView.setOnClickListener { rows.retryMore(row) }; return }
         holder.bind(row.videos[position])
         if (position >= row.videos.size - 4) rows.loadMore(row)
     }
 
-    override fun onViewRecycled(holder: Holder) {
-        Glide.with(holder.thumb).clear(holder.thumb)
+    override fun onViewRecycled(holder: RecyclerView.ViewHolder) {
+        if (holder is Holder) Glide.with(holder.thumb).clear(holder.thumb)
+    }
+
+    companion object {
+        private const val TYPE_VIDEO = 0
+        private const val TYPE_RETRY = 1
     }
 
     inner class Holder(view: View) : RecyclerView.ViewHolder(view) {

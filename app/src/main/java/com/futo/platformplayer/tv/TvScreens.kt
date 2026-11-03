@@ -233,13 +233,14 @@ fun mixedSourceRows(
         else withContext(Dispatchers.IO) { fetch(c).let { it to it.getResults().toList() } }
     fun lead(items: List<IPlatformContent>) = items.filter(TvRowsAdapter::playable).take(PER_SOURCE_IN_MIX)
     val mixed = clients.size > 1
-    val shown = mutableSetOf<String>() // what the mixed row actually displays
+    // What the mixed row actually displays. Replaced whole, never mutated, so other threads read a complete set.
+    val shown = java.util.concurrent.atomic.AtomicReference(emptySet<String>())
     var mixedAttempts = 0
     val mixedRow = TvRow(mixedTitle, hero = true, load = {
         val retry = mixedAttempts++ > 0
         val pages = clients.mapNotNull { c -> runCatching { lead(page(c, retry).second) }.getOrNull() }
         check(pages.isNotEmpty()) { "every source failed" }
-        TvHomeScreen.interleave(pages).also { items -> shown.clear(); shown.addAll(items.map { it.url }) }
+        TvHomeScreen.interleave(pages).also { items -> shown.set(items.map { it.url }.toSet()) }
     })
     val shelves = clients.map { c ->
         lateinit var row: TvRow
@@ -247,7 +248,7 @@ fun mixedSourceRows(
         row = TvRow(c.name, icon = c.icon, hero = !mixed, load = {
             val (pager, items) = page(c, attempts++ > 0)
             // Before the mixed row has loaded, its lead for this source is the same first page.
-            if (mixed) row.exclude = shown.toSet().ifEmpty { lead(items).map { it.url }.toSet() }
+            if (mixed) row.exclude = shown.get().ifEmpty { lead(items).map { it.url }.toSet() }
             pager
         })
         row
@@ -288,7 +289,8 @@ class TvSearchScreen(act: TvActivity) : TvRowsScreen(act, header = LayoutInflate
                 // Wait for every source so "no results" is only said when it is true.
                 val pages = firstPages.mapValues { (_, d) -> runCatching { d.await() }.getOrNull() }
                 if (q != lastQuery) return@launch
-                val withResults = clients.filter { c -> pages[c]?.second?.any(TvRowsAdapter::playable) == true }
+                // A first page of only shorts or posts still counts when more pages follow.
+                val withResults = clients.filter { c -> pages[c]?.let { (pager, items) -> items.any(TvRowsAdapter::playable) || pager.hasMorePages() } == true }
                 val failed = clients.filter { pages[it] == null }
                 // Each source keeps its own pager, so every shelf pages on as you scroll.
                 val results = mixedSourceRows(act, string(R.string.tv_row_results), withResults + failed, firstPages) {
