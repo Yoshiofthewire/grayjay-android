@@ -7,20 +7,27 @@
     android:gravity="center_horizontal"
     android:orientation="vertical">
 
+    <!-- The ring frame and the badges are siblings, so the focus ring never cuts across a badge. -->
     <FrameLayout
         android:layout_width="98dp"
         android:layout_height="98dp"
-        android:duplicateParentState="true"
-        android:foreground="@drawable/tv_avatar_frame">
+        android:duplicateParentState="true">
 
-        <!-- 5dp inset: the focus ring sits outside the artwork, readable on white avatars. -->
-        <ImageView
-            android:id="@+id/creator_avatar"
+        <FrameLayout
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:layout_margin="5dp"
-            android:contentDescription="@null"
-            android:scaleType="centerCrop" />
+            android:duplicateParentState="true"
+            android:foreground="@drawable/tv_avatar_frame">
+
+            <!-- 5dp inset: the focus ring sits outside the artwork, readable on white avatars. -->
+            <ImageView
+                android:id="@+id/creator_avatar"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:layout_margin="5dp"
+                android:contentDescription="@null"
+                android:scaleType="centerCrop" />
+        </FrameLayout>
 
         <ImageView
             android:id="@+id/creator_source"
@@ -37,7 +44,7 @@
             android:layout_width="16dp"
             android:layout_height="16dp"
             android:layout_gravity="top|end"
-            android:layout_margin="4dp"
+            android:layout_margin="2dp"
             android:background="@drawable/tv_new_dot"
             android:visibility="gone" />
     </FrameLayout>

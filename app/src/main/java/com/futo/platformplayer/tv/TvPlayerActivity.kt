@@ -104,6 +104,8 @@ class TvPlayerActivity : AppCompatActivity() {
         player.exoPlayer?.player?.stop()
         hideUpNext()
         findViewById<View>(R.id.tv_player_actions).visibility = View.GONE
+        player.playerView.useController = true
+        player.playerView.findViewById<View>(R.id.tv_controls_channel)?.visibility = View.GONE
         loading.visibility = View.VISIBLE
         findViewById<View>(R.id.tv_player_spinner).visibility = View.VISIBLE
         message.setText(R.string.tv_player_loading)
@@ -139,6 +141,8 @@ class TvPlayerActivity : AppCompatActivity() {
     /** Failed loads and stream errors wait for the viewer: retry, skip, or leave. Nothing auto-advances. */
     private fun showError() {
         player.playerView.hideController()
+        // An idle player may auto-show its controls; keep their buttons from taking focus under the error.
+        player.playerView.useController = false
         loading.visibility = View.VISIBLE
         findViewById<View>(R.id.tv_player_spinner).visibility = View.GONE
         message.setText(R.string.tv_player_failed)
@@ -148,7 +152,9 @@ class TvPlayerActivity : AppCompatActivity() {
     }
 
     private fun bindTitle(d: IPlatformVideoDetails) {
-        player.playerView.findViewById<View>(R.id.tv_controls_channel)?.setOnClickListener {
+        val channel = player.playerView.findViewById<View>(R.id.tv_controls_channel)
+        channel?.visibility = if (d.author.url.isNotBlank()) View.VISIBLE else View.GONE
+        channel?.setOnClickListener {
             saveHistory()
             // TvActivity is singleTask: this closes the player and opens the channel there.
             startActivity(Intent(this, TvActivity::class.java).putExtra(TvActivity.EXTRA_CHANNEL, d.author.url))
@@ -210,7 +216,7 @@ class TvPlayerActivity : AppCompatActivity() {
                 KeyEvent.KEYCODE_MEDIA_PAUSE -> { exo?.pause(); return true }
             }
             // Controls hidden: left/right seek straight away, like YouTube, Netflix and Plex.
-            if (!player.playerView.isControllerFullyVisible && exo != null && !exo.isCurrentMediaItemLive &&
+            if (!player.playerView.isControllerFullyVisible && exo != null && !exo.isCurrentMediaItemLive && exo.duration != androidx.media3.common.C.TIME_UNSET &&
                 (event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT || event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT)) {
                 val delta = if (event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) SEEK_MS else -SEEK_MS
                 exo.seekTo((exo.currentPosition + delta).coerceIn(0, exo.duration.coerceAtLeast(0)))

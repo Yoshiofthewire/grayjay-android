@@ -54,6 +54,7 @@
 
     <string name="tv_plugin_title">Add %1$s?</string>
     <string name="tv_plugin_by">From %1$s · version %2$d</string>
+    <string name="tv_plugin_claims">Claims to be from %1$s (unverified) · version %2$d</string>
     <string name="tv_plugin_official">Official FUTO source</string>
     <string name="tv_plugin_third_party">Third-party source, not reviewed by FUTO</string>
     <string name="tv_plugin_replaces">Replaces the %1$s source you already have.</string>

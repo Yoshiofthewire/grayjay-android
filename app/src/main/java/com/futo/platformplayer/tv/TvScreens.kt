@@ -107,22 +107,25 @@ class TvHomeScreen(act: TvActivity) : TvRowsScreen(act) {
         val firstPages = clients.associateWith { c ->
             act.lifecycleScope.async(Dispatchers.IO) { c.getHome().let { it to it.getResults().toList() } }
         }
-        // First load shares one request per source; a retry after a failure asks again.
-        suspend fun page(c: IPlatformClient) = try { firstPages.getValue(c).await() } catch (e: Throwable) {
-            withContext(Dispatchers.IO) { c.getHome().let { it to it.getResults().toList() } }
-        }
+        // A row's first load shares one request per source; only a "Try again" asks the source again.
+        suspend fun page(c: IPlatformClient, retry: Boolean) =
+            if (!retry) firstPages.getValue(c).await()
+            else withContext(Dispatchers.IO) { c.getHome().let { it to it.getResults().toList() } }
         val mixed = clients.size > 1
         fun lead(first: List<IPlatformContent>) = first.filter(TvRowsAdapter::playable).take(PER_SOURCE_IN_MIX)
+        var acrossAttempts = 0
         val across = TvRow(string(R.string.tv_row_across), hero = true, load = {
-            val pages = clients.mapNotNull { c -> runCatching { lead(page(c).second) }.getOrNull() }
+            val retry = acrossAttempts++ > 0
+            val pages = clients.mapNotNull { c -> runCatching { lead(page(c, retry).second) }.getOrNull() }
             check(pages.isNotEmpty()) { "every source failed" }
             interleave(pages)
         })
         // Shelves skip what the mixed row already shows, so nothing appears twice.
         val shelves = clients.map { c ->
             lateinit var row: TvRow
+            var attempts = 0
             row = TvRow(c.name, icon = c.icon, hero = !mixed, load = {
-                val (pager, first) = page(c)
+                val (pager, first) = page(c, attempts++ > 0)
                 if (mixed) row.exclude = lead(first).map { it.url }.toSet()
                 pager
             })
@@ -294,7 +297,7 @@ class TvSearchScreen(act: TvActivity) : TvRowsScreen(act, header = LayoutInflate
     companion object { private const val TAG = "TvSearch" }
 }
 
-class TvChannelScreen(act: TvActivity, private val url: String) : TvRowsScreen(act, header = LayoutInflater.from(act).inflate(R.layout.tv_header_channel, null)) {
+class TvChannelScreen(act: TvActivity, val url: String) : TvRowsScreen(act, header = LayoutInflater.from(act).inflate(R.layout.tv_header_channel, null)) {
     // Fixed at open time: the tab this channel was opened from.
     override val tab = act.currentTab
     private val follow: TextView = headerView.findViewById(R.id.channel_follow)

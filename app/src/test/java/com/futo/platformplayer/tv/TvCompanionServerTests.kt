@@ -2,6 +2,7 @@ package com.futo.platformplayer.tv
 
 import android.content.Context
 import org.junit.After
+import org.junit.Assume
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertThrows
@@ -80,8 +81,9 @@ class TvCompanionServerTests {
     fun listensOnlyOnTheBoundAddress() {
         assertTrue(server.url!!.startsWith("http://127.0.0.1:${server.port}/#"))
         // Bound to loopback here, so the machine's LAN address must refuse the connection.
-        val lan = TvCompanionServer.lanAddress() ?: return
-        assertThrows(java.net.ConnectException::class.java) { java.net.Socket(lan, server.port).close() }
+        val lan = TvCompanionServer.lanAddress()
+        Assume.assumeNotNull(lan) // skipped, not passed, on machines without a LAN address
+        assertThrows(java.net.ConnectException::class.java) { java.net.Socket(lan!!, server.port).close() }
     }
 
     @Test

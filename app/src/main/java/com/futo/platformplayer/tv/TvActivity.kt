@@ -97,7 +97,10 @@ class TvActivity : AppCompatActivity() {
         }
 
         // The phone link never outlives the TV app being on screen (player included).
-        TvForeground.onBackground = { stopCompanion() }
+        TvForeground.onBackground = {
+            stopCompanion()
+            if (currentTab == TAB_SUBSCRIPTIONS) (tabs[TAB_SUBSCRIPTIONS] as? TvSubscriptionsScreen)?.markSeen()
+        }
         showTab(TAB_HOME)
     }
 
@@ -173,7 +176,10 @@ class TvActivity : AppCompatActivity() {
         }
     }
 
-    fun openChannel(url: String) { push(TvChannelScreen(this, url)); focusContent() }
+    fun openChannel(url: String) {
+        if ((stack.lastOrNull() as? TvChannelScreen)?.url != url) push(TvChannelScreen(this, url))
+        focusContent()
+    }
     fun openCompanion() = showTab(TAB_PHONE)
     fun openSearch(query: String) {
         showTab(TAB_SEARCH)
@@ -370,6 +376,11 @@ class TvActivity : AppCompatActivity() {
         require(config.scriptSignature.isNullOrEmpty() || config.validate(script)) {
             "${config.name}'s signature doesn't match its code, so it can't be added"
         }
+        // A replacement keeps the installed source's login, so it must come from the same signer.
+        val installed = StatePlugins.instance.getPlugin(config.id)?.config?.scriptPublicKey
+        require(installed.isNullOrEmpty() || installed == config.scriptPublicKey) {
+            "This would replace your ${config.name} source with one from a different author, so it was refused"
+        }
         return config to script
     }
 
@@ -387,9 +398,15 @@ class TvActivity : AppCompatActivity() {
         }
         pluginDialog = dialog
 
+        // fetchPlugin already rejected mismatched signatures; still check here so the label can never outrun the proof.
+        val official = config.isOfficialAuthor() && config.validate(script)
+        val author = config.author.ifBlank { "an unknown author" }
         view.findViewById<TextView>(R.id.plugin_title).text = getString(R.string.tv_plugin_title, config.name)
-        view.findViewById<TextView>(R.id.plugin_author).text = getString(R.string.tv_plugin_by, config.author.ifBlank { "unknown author" }, config.version)
-        config.absoluteIconUrl?.let { Glide.with(this).load(it).into(view.findViewById<ImageView>(R.id.plugin_icon)) }
+        // Only a verified signature earns "From"; anything else is the config's own claim.
+        view.findViewById<TextView>(R.id.plugin_author).text =
+            getString(if (official) R.string.tv_plugin_by else R.string.tv_plugin_claims, author, config.version)
+        val icon = view.findViewById<ImageView>(R.id.plugin_icon)
+        config.absoluteIconUrl?.let { Glide.with(this).load(it).into(icon) } ?: run { icon.visibility = View.GONE }
 
         val details = view.findViewById<LinearLayout>(R.id.plugin_details)
         fun line(text: String, color: Int = R.color.tv_muted, bold: Boolean = false, top: Int = 10) {
@@ -401,8 +418,6 @@ class TvActivity : AppCompatActivity() {
                 setPadding(0, (top * resources.displayMetrics.density).toInt(), 0, 0)
             })
         }
-        // fetchPlugin already rejected mismatched signatures; still check here so the label can never outrun the proof.
-        val official = config.isOfficialAuthor() && config.validate(script)
         line(getString(if (official) R.string.tv_plugin_official else R.string.tv_plugin_third_party), R.color.white, bold = true, top = 0)
         StatePlugins.instance.getPlugin(config.id)?.let { line(getString(R.string.tv_plugin_replaces, it.config.name)) }
         if (config.description.isNotBlank()) line(config.description)
