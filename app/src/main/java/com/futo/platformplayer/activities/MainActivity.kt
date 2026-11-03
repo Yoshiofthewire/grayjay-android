@@ -301,6 +301,16 @@ class MainActivity : AppCompatActivity, IWithResultLauncher {
 
     @UnstableApi
     override fun onCreate(savedInstanceState: Bundle?) {
+        // On a TV, a plain app launch (e.g. "Open" after installing) goes to the TV interface; the phone UI
+        // is portrait-only and needs touch. Links and shares still open here.
+        if (intent?.action == Intent.ACTION_MAIN &&
+            getSystemService(UiModeManager::class.java)?.currentModeType == Configuration.UI_MODE_TYPE_TELEVISION) {
+            super.onCreate(null);
+            // NO_USER_ACTION: skips onUserLeaveHint, which expects the phone UI this activity never built.
+            startActivity(Intent(this, com.futo.platformplayer.tv.TvActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NO_USER_ACTION));
+            finish();
+            return;
+        }
         Logger.w(TAG, "MainActivity Starting [$mainId]");
 
         StateApp.instance.setGlobalContext(this, lifecycleScope, mainId);
