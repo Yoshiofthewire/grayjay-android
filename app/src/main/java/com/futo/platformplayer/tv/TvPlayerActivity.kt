@@ -187,6 +187,7 @@ class TvPlayerActivity : AppCompatActivity() {
         (next as? com.futo.platformplayer.api.media.models.video.IPlatformVideo)?.thumbnails?.getHQThumbnail()?.let {
             Glide.with(this).load(it).into(findViewById<ImageView>(R.id.tv_upnext_thumb))
         }
+        panel.visibility = View.GONE
         player.playerView.hideController()
         player.playerView.useController = false
         upNext.visibility = View.VISIBLE
