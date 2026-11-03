@@ -17,6 +17,7 @@ import com.futo.platformplayer.api.http.ManagedHttpClient
 import com.futo.platformplayer.api.media.platforms.js.SourcePluginConfig
 import com.futo.platformplayer.logging.Logger
 import com.futo.platformplayer.states.StatePlatform
+import com.futo.platformplayer.states.StatePlugins
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -38,7 +39,23 @@ object TvSourceCatalog {
     private const val MAX_CONFIG_BYTES = 256L * 1024
     private val LINK = Regex("""grayjay://plugin/(https://plugins\.grayjay\.app/[A-Za-z0-9._/-]+\.json)""")
 
-    class Entry(val url: String, val config: SourcePluginConfig)
+    /** [bundledPath] is set for sources shipped inside the app rather than fetched from the site. */
+    class Entry(val url: String, val config: SourcePluginConfig, val bundledPath: String? = null)
+
+    class Result(val entries: List<Entry>, val siteFailed: Boolean)
+
+    /** Site sources first, then any source bundled with the app that the site doesn't list (e.g. Floatplane). */
+    suspend fun loadWithBundled(context: Context): Result {
+        val site = try { load() } catch (e: Throwable) { Logger.w("TvSourceCatalog", "Site list failed", e); null }
+        val siteIds = site.orEmpty().map { it.config.id }.toSet()
+        val bundled = withContext(Dispatchers.IO) {
+            StatePlugins.instance.getEmbeddedSources(context).mapNotNull { (id, path) ->
+                if (id in siteIds) return@mapNotNull null
+                StatePlugins.instance.getEmbeddedPluginConfig(context, path)?.let { Entry("", it, path) }
+            }
+        }
+        return Result(site.orEmpty() + bundled, site == null)
+    }
 
     /** Config URLs from the site's "grayjay://plugin/<url>" links; only FUTO's own host, in page order. */
     fun parseConfigUrls(html: String): List<String> = LINK.findAll(html).map { it.groupValues[1] }.distinct().toList()
@@ -108,10 +125,13 @@ class TvSourcesScreen(act: TvActivity, private val onboarding: Boolean) : TvScre
             try {
                 // The app ships these sources bundled but switched off; "Added" means switched on.
                 val installed = StatePlatform.instance.getEnabledClients().map { it.id }.toSet()
-                val entries = TvSourceCatalog.load()
+                val result = TvSourceCatalog.loadWithBundled(act)
+                if (result.entries.isEmpty()) error("nothing to offer")
                 items.clear()
-                items.addAll(entries.map { Item(it, it.config.id in installed) })
+                items.addAll(result.entries.map { Item(it, it.config.id in installed) })
+                // Offline: the bundled sources are still offered, with a note that the site was unreachable.
                 status.visibility = View.GONE
+                if (result.siteFailed) act.toast(act.getString(R.string.tv_sources_site_failed))
                 add.visibility = View.VISIBLE
                 updateAdd()
                 adapter.notifyDataSetChanged()
@@ -143,12 +163,7 @@ class TvSourcesScreen(act: TvActivity, private val onboarding: Boolean) : TvScre
             var failed = 0
             for (item in queue) {
                 item.state = State.ADDING; adapter.notifyItemChanged(items.indexOf(item))
-                val error = try {
-                    val (config, script) = withContext(Dispatchers.IO) { act.fetchPlugin(item.entry.url) }
-                    // This list promises FUTO's own sources: anything not verifiably signed by FUTO is refused.
-                    require(config.isOfficialAuthor() && config.validate(script)) { "not signed by FUTO" }
-                    act.installQuietly(config, script)
-                } catch (e: Throwable) { e }
+                val error = try { install(item.entry); null } catch (e: Throwable) { e }
                 if (error != null) Logger.e(TAG, "Adding ${item.entry.config.name} failed", error)
                 item.state = if (error == null) State.ADDED else State.FAILED
                 if (error != null) { failed++; item.picked = false }
@@ -182,17 +197,19 @@ class TvSourcesScreen(act: TvActivity, private val onboarding: Boolean) : TvScre
                 val c = item.entry.config
                 name.text = c.name
                 desc.text = c.description
-                Glide.with(icon).load(c.absoluteIconUrl).into(icon)
+                Glide.with(icon).load(iconOf(item.entry)).into(icon)
                 itemView.isSelected = item.picked || item.state == State.ADDED
                 check.visibility = if (itemView.isSelected) View.VISIBLE else View.INVISIBLE
                 // Permission warnings stay visible on the card, so picking a source is informed consent.
-                val warnings = c.getWarnings().map { it.first }
+                // A bundled source ships inside the app, so signature warnings don't apply to it.
+                val bundled = item.entry.bundledPath != null
+                val warnings = c.getWarnings().map { it.first }.filter { !bundled || "Signature" !in it }
                 note.setTextColor(ContextCompat.getColor(act, if (item.state == State.FAILED || warnings.isNotEmpty() && item.state == State.IDLE) R.color.tv_warn else R.color.tv_muted))
                 note.text = when (item.state) {
                     State.ADDED -> act.getString(R.string.tv_sources_added)
                     State.ADDING -> act.getString(R.string.tv_sources_adding)
                     State.FAILED -> act.getString(R.string.tv_sources_couldnt)
-                    State.IDLE -> warnings.joinToString(" · ")
+                    State.IDLE -> warnings.joinToString(" · ").ifEmpty { if (bundled) act.getString(R.string.tv_sources_bundled) else "" }
                 }
                 // Warnings get the room they need; the description gives way.
                 val longNote = item.state == State.IDLE && warnings.isNotEmpty()
@@ -208,6 +225,32 @@ class TvSourcesScreen(act: TvActivity, private val onboarding: Boolean) : TvScre
                 itemView.setOnFocusChangeListener { fv, focused -> TvFocus.scale(fv, focused) }
             }
         }
+    }
+
+    /** A bundled source's icon is a path next to its config inside the app's assets. */
+    private fun iconOf(entry: TvSourceCatalog.Entry): String? {
+        val icon = entry.config.iconUrl ?: return null
+        val dir = entry.bundledPath?.substringBeforeLast('/', "") ?: return entry.config.absoluteIconUrl
+        return if (icon.startsWith("http")) icon else "file:///android_asset/$dir/${icon.removePrefix("./")}"
+    }
+
+    /** Throws with the reason when the source can't be added. */
+    private suspend fun install(entry: TvSourceCatalog.Entry) {
+        val bundled = entry.bundledPath
+        if (bundled != null) {
+            // Shipped inside the app: no download or signature check, just install the bundled copy if needed and switch it on.
+            val id = entry.config.id
+            if (StatePlatform.instance.getAvailableClients().none { it.id == id }) withContext(Dispatchers.IO) {
+                check(StatePlugins.instance.installEmbeddedPlugin(act, bundled, id)) { "bundled copy missing" }
+                StatePlatform.instance.updateAvailableClients(act)
+            }
+            StatePlatform.instance.enableClient(listOf(id))
+            return
+        }
+        val (config, script) = withContext(Dispatchers.IO) { act.fetchPlugin(entry.url) }
+        // This list promises FUTO's own sources: anything not verifiably signed by FUTO is refused.
+        require(config.isOfficialAuthor() && config.validate(script)) { "not signed by FUTO" }
+        act.installQuietly(config, script)?.let { throw it }
     }
 
     companion object { private const val TAG = "TvSources" }

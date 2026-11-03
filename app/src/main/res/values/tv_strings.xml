@@ -13,6 +13,7 @@
     <string name="tv_row_results">Top results</string>
     <string name="tv_row_videos">Videos</string>
     <string name="tv_row_loading">Loading…</string>
+    <string name="tv_row_needs_login">Needs you to log in, which the TV can\'t do yet</string>
     <string name="tv_row_failed">Couldn\'t load this source</string>
     <string name="tv_row_empty">Nothing here yet</string>
     <string name="tv_new_count">%1$d new</string>
@@ -94,6 +95,8 @@
     <string name="tv_sources_skip">Skip for now</string>
     <string name="tv_sources_back">Done</string>
     <string name="tv_sources_continue">Continue</string>
+    <string name="tv_sources_bundled">Built in</string>
+    <string name="tv_sources_site_failed">Couldn\'t reach plugins.grayjay.app, so only the sources bundled with the app are shown.</string>
     <string name="tv_sources_added">Added</string>
     <string name="tv_sources_adding">Adding…</string>
     <string name="tv_sources_couldnt">Couldn\'t add</string>

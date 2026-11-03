@@ -1,0 +1,26 @@
+{
+  "name": "Floatplane",
+  "description": "Watch the Floatplane creators you subscribe to: new videos on Home, creator channels, search and playback.",
+  "author": "Yoshiofthewire",
+  "platformUrl": "https://www.floatplane.com",
+  "sourceUrl": "https://your-host.invalid/floatplane/FloatplaneConfig.json",
+  "scriptUrl": "./FloatplaneScript.js",
+  "iconUrl": "./FloatplaneIcon.png",
+  "version": 1,
+  "id": "efee6d9a-c9b1-4fbf-89e7-7a2c3cbfe655",
+  "scriptSignature": "",
+  "scriptPublicKey": "",
+  "packages": ["Http"],
+  "allowEval": false,
+  "allowUrls": ["www.floatplane.com"],
+  "allowAllHttpHeaderAccess": false,
+  "authentication": {
+    "loginUrl": "https://www.floatplane.com/login",
+    "cookiesToFind": ["sails.sid"]
+  },
+  "settings": [],
+  "enableInSearch": true,
+  "enableInHome": true,
+  "enableInShorts": false,
+  "changelog": { "1": ["Initial release"] }
+}

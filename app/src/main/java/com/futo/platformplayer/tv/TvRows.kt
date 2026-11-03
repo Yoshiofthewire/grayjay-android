@@ -13,6 +13,7 @@ import com.futo.platformplayer.R
 import com.futo.platformplayer.api.media.models.contents.IPlatformContent
 import com.futo.platformplayer.api.media.models.video.IPlatformVideo
 import com.futo.platformplayer.api.media.structures.IPager
+import com.futo.platformplayer.engine.exceptions.ScriptLoginRequiredException
 import com.futo.platformplayer.logging.Logger
 import com.futo.platformplayer.models.ImageVariable
 import com.futo.platformplayer.states.StateHistory
@@ -57,6 +58,8 @@ class TvRow(
     var allShownElsewhere = false
     /** The last next-page request failed; the shelf ends in a "Try again" tile. */
     var moreFailed = false
+    /** The source needs its account; logging in from the TV isn't possible yet. */
+    var needsLogin = false
     /** A long run of shorts/posts hit the skip limit with pages left; the shelf ends in "Load more". */
     var moreStalled = false
     val hasTail get() = moreFailed || moreStalled
@@ -152,7 +155,7 @@ class TvRowsAdapter(private val ctx: TvRowsContext, private val header: View? = 
             val r = itemView.resources
             status.text = when (row.state) {
                 TvRow.State.LOADING -> r.getString(R.string.tv_row_loading)
-                TvRow.State.FAILED -> r.getString(R.string.tv_row_failed)
+                TvRow.State.FAILED -> r.getString(if (row.needsLogin) R.string.tv_row_needs_login else R.string.tv_row_failed)
                 TvRow.State.READY -> {
                     val newCount = row.videos.count { isNew(it, ctx) }
                     when {
@@ -190,6 +193,7 @@ class TvRowsAdapter(private val ctx: TvRowsContext, private val header: View? = 
                 } catch (e: Throwable) {
                     Logger.w(TAG, "Row '${row.title}' failed", e)
                     row.state = TvRow.State.FAILED
+                    row.needsLogin = generateSequence(e) { it.cause }.any { it is ScriptLoginRequiredException }
                 }
                 ctx.onRowLoaded(row)
                 val i = rows.indexOf(row)
