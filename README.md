@@ -1,3 +1,7 @@
+> **This fork adds an Android TV interface.** It is an unofficial, modified version of Grayjay, not made or
+> endorsed by FUTO. See [ANDROID-TV.md](ANDROID-TV.md) for what changed, how to install it, and the APK
+> downloads on the [Releases](https://github.com/Yoshiofthewire/grayjay-android/releases) page.
+
 # PlatformPlayer
 
 The FUTO media app endeavours creating infrastructure for creators to have their content hosted by someone else but at the same time having creators retain full ownership of their content. We want creators to feel like they are publishing to the world, and we want multiple indexers competing with each other to do a good job connecting consumers to creators and their content.
