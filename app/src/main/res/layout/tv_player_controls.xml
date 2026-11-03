@@ -91,6 +91,17 @@
                 android:text="@string/tv_go_to_channel" />
 
             <ImageButton
+                android:id="@+id/tv_controls_settings"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:layout_marginEnd="24dp"
+                android:background="@drawable/tv_button"
+                android:contentDescription="@string/tv_player_settings"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_settings"
+                android:tint="@color/tv_button_text" />
+
+            <ImageButton
                 android:id="@+id/exo_rew"
                 android:layout_width="48dp"
                 android:layout_height="48dp"

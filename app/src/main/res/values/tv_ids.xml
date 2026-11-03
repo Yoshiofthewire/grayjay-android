@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <item name="source_action_toggle" type="id" />
+    <item name="source_action_login" type="id" />
+    <item name="source_action_remove" type="id" />
+</resources>
