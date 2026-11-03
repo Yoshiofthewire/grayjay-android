@@ -19,9 +19,11 @@
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
 
-    <!-- Android TV: no touchscreen, leanback launcher optional so phones are unaffected. -->
+    <!-- Android TV: no touchscreen, leanback launcher optional so phones are unaffected. The phone
+         screens lock to portrait, which otherwise implies a required portrait screen TVs lack. -->
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <uses-feature android:name="android.software.leanback" android:required="false" />
+    <uses-feature android:name="android.hardware.screen.portrait" android:required="false" />
 
     <application
         android:banner="@drawable/tv_banner"
