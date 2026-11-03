@@ -32,6 +32,8 @@
   .btn:active { background:var(--blue-d); }
   .btn.quiet { background:var(--s2); }
   .btn[disabled] { opacity:.5; }
+  .btn.wide { width:100%; }
+  .or { color:var(--mute); text-align:center; margin:16px 0 10px; font-size:14px; }
   ul { list-style:none; margin:18px 0 0; padding:0; }
   li.creator { display:flex; align-items:center; gap:14px; padding:12px 0; border-bottom:1px solid var(--s2); }
   li.creator img, li.creator .ph { width:48px; height:48px; border-radius:50%; background:var(--s2); object-fit:cover; flex:none; }
@@ -85,7 +87,10 @@
 
   <section id="t-source" role="tabpanel" aria-labelledby="b-source" hidden>
     <h2>Add a source</h2>
-    <p class="lead">Paste the link to a Grayjay source plugin (its config URL or a vfuto:// link).</p>
+    <p class="lead">Scan a source's QR code, like the ones on plugins.grayjay.app, or paste its link.</p>
+    <button class="btn wide" type="button" id="b-scan">Scan a QR code</button>
+    <input id="i-scan" type="file" accept="image/*" capture="environment" hidden>
+    <p class="or">or paste a link</p>
     <form id="f-source"><input id="i-source" type="url" inputmode="url" enterkeyhint="send" placeholder="https://…/config.json" aria-label="Plugin link" autocomplete="off"><button class="btn">Add</button></form>
     <div class="note"><b>Plugins run code on your TV.</b> The TV shows who made it and what it can access, and nothing installs until you confirm there with the remote.</div>
     <div class="note" id="sources">Loading installed sources…</div>
@@ -122,7 +127,8 @@
   async function api(method, path, body) {
     let res;
     try {
-      res = await fetch(path, { method, headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+      const raw = body instanceof Blob;
+      res = await fetch(path, { method, headers: { "Authorization": "Bearer " + token, "Content-Type": raw ? body.type : "application/json" }, body: raw ? body : body ? JSON.stringify(body) : undefined });
     } catch (e) {
       $("dot").classList.add("off"); $("tvstatus").textContent = "Can't reach the TV";
       throw new Error("Can't reach the TV. Open Grayjay on the TV, choose “Use your phone”, and scan the code again.");
@@ -186,6 +192,34 @@
   sender("f-search", "i-search", "/api/search", "query", "Search sent to your TV");
   sender("f-link", "i-link", "/api/play", "url", "Opening on your TV");
   sender("f-source", "i-source", "/api/plugin", "url", "Check your TV to confirm the install");
+
+  // Live camera scanning needs HTTPS, which a LAN page can't have. Instead the phone's camera takes a
+  // photo, the page shrinks it, and the TV reads the QR code.
+  async function shrink(file) {
+    let img;
+    try { img = await createImageBitmap(file); }
+    catch {
+      img = await new Promise((ok, fail) => {
+        const r = new FileReader();
+        r.onload = () => { const i = new Image(); i.onload = () => ok(i); i.onerror = fail; i.src = r.result; };
+        r.onerror = fail; r.readAsDataURL(file);
+      });
+    }
+    const scale = Math.min(1, 1600 / Math.max(img.width, img.height));
+    const c = document.createElement("canvas");
+    c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
+    c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+    return new Promise((ok, fail) => c.toBlob(b => b ? ok(b) : fail(new Error("Couldn't read that photo")), "image/jpeg", 0.85));
+  }
+  $("b-scan").addEventListener("click", () => $("i-scan").click());
+  $("i-scan").addEventListener("change", e => {
+    const file = e.target.files[0]; e.target.value = "";
+    if (!file) return;
+    act($("b-scan"), async () => {
+      toast("Reading the code on your TV…");
+      toast(await api("POST", "/api/plugin-photo", await shrink(file)));
+    });
+  });
 
   $("follow-link").addEventListener("click", e => {
     const v = $("i-link").value.trim(); if (!v) { toast("Paste a channel link first", true); return; }

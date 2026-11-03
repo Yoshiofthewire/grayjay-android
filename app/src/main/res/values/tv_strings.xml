@@ -18,7 +18,7 @@
     <string name="tv_new_count">%1$d new</string>
 
     <string name="tv_no_sources_title">No sources yet</string>
-    <string name="tv_no_sources_body">Grayjay shows videos from the sources you add. Add one from your phone, it takes a minute.</string>
+    <string name="tv_no_sources_body">Grayjay shows videos from the sources you add. Pick some here, or add one from your phone.</string>
     <string name="tv_no_subs_title">You\'re not following anyone yet</string>
     <string name="tv_no_subs_body">Follow creators from any source on your phone, and their new videos land here.</string>
     <string name="tv_search_empty_title">Search every source at once</string>
@@ -77,4 +77,26 @@
     <string name="tv_rewind">Rewind</string>
     <string name="tv_forward">Fast forward</string>
     <string name="tv_live">LIVE</string>
+    <string name="tv_starting">Starting Grayjay…</string>
+    <string name="tv_sources_title">Choose your sources</string>
+    <string name="tv_sources_body">Official sources from plugins.grayjay.app. Pick the ones you watch; you can add more later from your phone.</string>
+    <string name="tv_sources_loading">Getting the source list from plugins.grayjay.app…</string>
+    <string name="tv_sources_failed">Couldn\'t reach plugins.grayjay.app. Check the TV\'s connection and try again, or skip and add sources from your phone.</string>
+    <string name="tv_sources_pick">Pick sources</string>
+    <plurals name="tv_sources_add">
+        <item quantity="one">Add %1$d source</item>
+        <item quantity="other">Add %1$d sources</item>
+    </plurals>
+    <plurals name="tv_sources_some_failed">
+        <item quantity="one">%1$d source couldn\'t be added. Pick it to try again.</item>
+        <item quantity="other">%1$d sources couldn\'t be added. Pick them to try again.</item>
+    </plurals>
+    <string name="tv_sources_skip">Skip for now</string>
+    <string name="tv_sources_back">Done</string>
+    <string name="tv_sources_continue">Continue</string>
+    <string name="tv_sources_added">Added</string>
+    <string name="tv_sources_adding">Adding…</string>
+    <string name="tv_sources_couldnt">Couldn\'t add</string>
+    <string name="tv_sources_choose">Choose sources</string>
+    <string name="tv_start_watching">Start watching</string>
 </resources>

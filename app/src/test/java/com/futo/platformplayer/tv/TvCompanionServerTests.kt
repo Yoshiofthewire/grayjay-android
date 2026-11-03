@@ -86,6 +86,34 @@ class TvCompanionServerTests {
         assertThrows(java.net.ConnectException::class.java) { java.net.Socket(lan!!, server.port).close() }
     }
 
+    private fun postBytes(path: String, body: ByteArray, auth: String?): Int {
+        val c = URL("http://127.0.0.1:${server.port}$path").openConnection() as HttpURLConnection
+        c.requestMethod = "POST"; c.doOutput = true
+        c.setRequestProperty("Content-Type", "image/jpeg")
+        c.setFixedLengthStreamingMode(body.size)
+        auth?.let { c.setRequestProperty("Authorization", it) }
+        val code = try { c.outputStream.use { it.write(body) }; c.responseCode } catch (e: java.io.IOException) { c.responseCode }
+        c.disconnect()
+        return code
+    }
+
+    @Test
+    fun photoEndpointNeedsTokenAndForwardsTheImage() {
+        val jpeg = ByteArray(50_000) { (it % 251).toByte() }
+        assertEquals(401, postBytes("/api/plugin-photo", jpeg, null))
+        assertTrue(requests.isEmpty())
+        assertEquals(200, postBytes("/api/plugin-photo", jpeg, "Bearer ${server.token}"))
+        val r = requests.single() as TvCompanionServer.Request.InstallPluginFromPhoto
+        assertTrue(r.image.contentEquals(jpeg))
+    }
+
+    @Test
+    fun photoEndpointRefusesOversizedImages() {
+        val big = ByteArray(TvCompanionServer.MAX_PHOTO + 1)
+        assertEquals(413, postBytes("/api/plugin-photo", big, "Bearer ${server.token}"))
+        assertTrue(requests.isEmpty())
+    }
+
     @Test
     fun tokensDifferPerSession() {
         val other = TvCompanionServer(Mockito.mock(Context::class.java), InetAddress.getLoopbackAddress()) { "ok" }

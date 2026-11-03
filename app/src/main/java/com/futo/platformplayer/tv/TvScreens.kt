@@ -103,7 +103,7 @@ class TvHomeScreen(act: TvActivity) : TvRowsScreen(act) {
     fun load() {
         val clients = StatePlatform.instance.getSortedEnabledClient().filter { (it as? JSClient)?.enableInHome ?: true }
         if (clients.isEmpty()) {
-            showMessage(string(R.string.tv_no_sources_title), string(R.string.tv_no_sources_body), string(R.string.tv_phone)) { act.openCompanion() }
+            showMessage(string(R.string.tv_no_sources_title), string(R.string.tv_no_sources_body), string(R.string.tv_sources_choose)) { act.openSourcePicker(onboarding = false) }
             return
         }
         val rows = mixedSourceRows(act, string(R.string.tv_row_across), clients) { it.getHome() }
@@ -407,6 +407,14 @@ class TvCompanionScreen(act: TvActivity) : TvScreen(act) {
             setStatus(act.companionLastAction)
         }
         view.findViewById<View>(R.id.companion_stop).post { view.findViewById<View>(R.id.companion_stop).requestFocus() }
+    }
+
+    /** During first-run setup this screen is step 2; the extra button moves on to Home. */
+    fun showDoneButton() {
+        val done = view.findViewById<TextView>(R.id.companion_done)
+        done.visibility = View.VISIBLE
+        done.setOnClickListener { act.showTab(TvActivity.TAB_HOME); act.focusHome() }
+        done.post { done.requestFocus() }
     }
 
     fun setStatus(lastAction: String?, connected: Boolean = act.phoneConnected) {

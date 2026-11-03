@@ -33,6 +33,8 @@ import com.futo.platformplayer.states.StateSubscriptions
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 import java.util.UUID
 
 /**
@@ -68,12 +70,6 @@ class TvActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.tv_activity)
 
-        runBlocking {
-            try { StatePlatform.instance.updateAvailableClients(this@TvActivity) } catch (e: Throwable) { Logger.e(TAG, "updateAvailableClients failed", e) }
-        }
-        StateApp.instance.mainAppStarted(this)
-        StateApp.instance.mainAppStartedWithExternalFiles(this)
-
         content = findViewById(R.id.tv_content)
         rail = findViewById(R.id.tv_rail)
         dim = findViewById(R.id.tv_dim)
@@ -101,7 +97,55 @@ class TvActivity : AppCompatActivity() {
             stopCompanion()
             if (currentTab == TAB_SUBSCRIPTIONS) (tabs[TAB_SUBSCRIPTIONS] as? TvSubscriptionsScreen)?.markSeen()
         }
-        showTab(TAB_HOME)
+
+        // Loading sources compiles plugin code (and installs the bundled ones on first launch). On a slow
+        // TV that takes long enough to trip "isn't responding" if done on the main thread, so the splash
+        // stays up while it runs in the background.
+        rail.visibility = View.GONE
+        lifecycleScope.launch {
+            try { StatePlatform.instance.updateAvailableClients(this@TvActivity) } catch (e: Throwable) { Logger.e(TAG, "updateAvailableClients failed", e) }
+            StateApp.instance.mainAppStarted(this@TvActivity)
+            StateApp.instance.mainAppStartedWithExternalFiles(this@TvActivity)
+            ready = true
+            findViewById<View>(R.id.tv_splash).animate().alpha(0f).setDuration(200).withEndAction { findViewById<View>(R.id.tv_splash).visibility = View.GONE }
+            if (TvOnboarding.done(this@TvActivity)) {
+                setRailVisible(true)
+                showTab(TAB_HOME)
+                pendingChannel?.let { openChannel(it) }
+            } else openSourcePicker(onboarding = true)
+            pendingChannel = null
+        }
+    }
+
+    private var ready = false
+    private var pendingChannel: String? = null
+
+    private fun setRailVisible(visible: Boolean) {
+        rail.visibility = if (visible) View.VISIBLE else View.GONE
+        (content.layoutParams as ViewGroup.MarginLayoutParams).marginStart = if (visible) resources.getDimensionPixelSize(R.dimen.tv_rail_width) else 0
+        content.requestLayout()
+    }
+
+    /** The source picker: step 1 of first-run setup, or reached later from an empty Home. */
+    fun openSourcePicker(onboarding: Boolean) {
+        setRailVisible(false)
+        stack.lastOrNull()?.onHidden()
+        stack.clear()
+        content.removeAllViews()
+        push(TvSourcesScreen(this, onboarding))
+        focusContent()
+    }
+
+    /** Leaves the source picker. During setup the next step is the phone screen. */
+    fun sourcesDone(onboarding: Boolean) {
+        TvOnboarding.markDone(this)
+        setRailVisible(true)
+        tabs.remove(TAB_HOME)?.onDestroyed()
+        if (onboarding) {
+            showTab(TAB_PHONE)
+            (tabs[TAB_PHONE] as? TvCompanionScreen)?.showDoneButton()
+        } else showTab(TAB_HOME)
+        focusContent()
     }
 
     override fun onStart() {
@@ -112,7 +156,8 @@ class TvActivity : AppCompatActivity() {
     // The player's "Go to channel" relaunches this singleTask activity with a channel URL.
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        intent.getStringExtra(EXTRA_CHANNEL)?.let { openChannel(it) }
+        val channel = intent.getStringExtra(EXTRA_CHANNEL) ?: return
+        if (ready) openChannel(channel) else pendingChannel = channel
     }
 
     override fun onStop() {
@@ -160,6 +205,7 @@ class TvActivity : AppCompatActivity() {
     }
 
     private fun back() {
+        if (!ready || stack.lastOrNull() is TvSourcesScreen) { finish(); return }
         val focusInRail = currentFocus?.let(::isInRail) == true
         when {
             stack.size > 1 -> {
@@ -181,6 +227,7 @@ class TvActivity : AppCompatActivity() {
         focusContent()
     }
     fun openCompanion() = showTab(TAB_PHONE)
+    fun focusHome() = focusContent()
     fun openSearch(query: String) {
         showTab(TAB_SEARCH)
         (tabs[TAB_SEARCH] as TvSearchScreen).search(query)
@@ -324,6 +371,14 @@ class TvActivity : AppCompatActivity() {
                 StatePlatform.instance.hasEnabledChannelClient(request.url) -> onMain { bringToFront(); openChannel(request.url); "Opened the channel on your TV" }
                 else -> throw IllegalArgumentException("None of your sources can open that link")
             }
+            is TvCompanionServer.Request.InstallPluginFromPhoto -> {
+                val text = TvQr.decodeImage(request.image)
+                    ?: throw IllegalArgumentException("Couldn't find a QR code in that photo. Get closer and try again")
+                val url = TvCompanionServer.httpUrl(text)
+                val (config, script) = fetchPlugin(url)
+                onMain { bringToFront(); confirmPlugin(config, script) }
+                "Check your TV to confirm adding ${config.name}"
+            }
             is TvCompanionServer.Request.InstallPlugin -> {
                 val (config, script) = fetchPlugin(request.url)
                 onMain { bringToFront(); confirmPlugin(config, script) }
@@ -353,7 +408,7 @@ class TvActivity : AppCompatActivity() {
         return runBlocking { result.await() }
     }
 
-    private fun fetchPlugin(url: String): Pair<SourcePluginConfig, String> {
+    internal fun fetchPlugin(url: String): Pair<SourcePluginConfig, String> {
         val client = ManagedHttpClient().apply { setTimeout(FETCH_TIMEOUT_MS) }
         val config = try {
             client.get(url).use { resp ->
@@ -460,6 +515,18 @@ class TvActivity : AppCompatActivity() {
                 scroll.foreground = ContextCompat.getDrawable(this, R.drawable.tv_card_frame)
             }
         }
+    }
+
+    /** Installs and enables a source; returns the error, or null on success. */
+    internal suspend fun installQuietly(config: SourcePluginConfig, script: String): Throwable? {
+        val error = suspendCancellableCoroutine { cont ->
+            StatePlugins.instance.installPluginBackground(this, lifecycleScope, config, script, { _, _ -> }) { ex -> cont.resume(ex) }
+        }
+        if (error == null) {
+            StatePlugins.instance.clearUpdateAvailable(config)
+            if (!StatePlatform.instance.isClientEnabled(config.id)) StatePlatform.instance.enableClient(listOf(config.id))
+        }
+        return error
     }
 
     private fun installPlugin(config: SourcePluginConfig, script: String) {

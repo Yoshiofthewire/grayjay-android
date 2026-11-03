@@ -32,6 +32,8 @@ class TvCompanionServer(
 ) {
     sealed class Request {
         data class InstallPlugin(val url: String) : Request()
+        /** A photo of a source's QR code, taken on the phone; the TV reads the code. */
+        class InstallPluginFromPhoto(val image: ByteArray) : Request()
         data class Follow(val url: String) : Request()
         data class Search(val query: String) : Request()
         data class Play(val url: String) : Request()
@@ -81,6 +83,10 @@ class TvCompanionServer(
             it.respondJson(200, results)
         }
         api(s, "POST", "/api/plugin") { it.respondCode(200, onRequest(Request.InstallPlugin(httpUrl(body<UrlBody>(it).url)))) }
+        api(s, "POST", "/api/plugin-photo", MAX_PHOTO) {
+            require(it.contentLength in 1..MAX_PHOTO) { "Send a photo of the QR code" }
+            it.respondCode(200, onRequest(Request.InstallPluginFromPhoto(readBody(it))))
+        }
         api(s, "POST", "/api/follow") { it.respondCode(200, onRequest(Request.Follow(httpUrl(body<UrlBody>(it).url)))) }
         api(s, "POST", "/api/play") { it.respondCode(200, onRequest(Request.Play(httpUrl(body<UrlBody>(it).url)))) }
         api(s, "POST", "/api/search") {
@@ -101,12 +107,12 @@ class TvCompanionServer(
         url = null
     }
 
-    private fun api(s: ManagedHttpServer, method: String, path: String, handler: (HttpContext) -> Unit) {
+    private fun api(s: ManagedHttpServer, method: String, path: String, maxBody: Int = MAX_BODY, handler: (HttpContext) -> Unit) {
         s.addHandler(HttpFunctionHandler(method, path) { ctx ->
             if (!authorized(ctx.getHeader("authorization"))) {
                 ctx.skipBody(); return@HttpFunctionHandler ctx.respondCode(401, "Scan the code on your TV again")
             }
-            if (ctx.contentLength > MAX_BODY) {
+            if (ctx.contentLength > maxBody) {
                 ctx.skipBody(); return@HttpFunctionHandler ctx.respondCode(413, "Too large")
             }
             lastRequestAt = System.currentTimeMillis()
@@ -132,15 +138,27 @@ class TvCompanionServer(
         throw IllegalArgumentException("Bad request")
     }
 
+    private fun readBody(ctx: HttpContext): ByteArray {
+        val out = java.io.ByteArrayOutputStream(ctx.contentLength.toInt())
+        val buf = ByteArray(16 * 1024)
+        while (true) { val n = ctx.readContentBytes(buf, buf.size); if (n <= 0) break; out.write(buf, 0, n) }
+        return out.toByteArray()
+    }
+
     private fun page(): String = StateAssets.readAsset(context, "tv/companion.html") ?: "Missing companion page"
 
     companion object {
         private const val TAG = "TvCompanionServer"
         private const val MAX_BODY = 8 * 1024
         private const val MAX_TEXT = 200
+        /** The phone shrinks photos to about 1600 px JPEG before sending; this leaves headroom. */
+        const val MAX_PHOTO = 4 * 1024 * 1024
 
         fun httpUrl(raw: String): String {
-            val u = raw.trim().replaceFirst(Regex("^vfuto://", RegexOption.IGNORE_CASE), "https://")
+            // Accepts the forms sources are shared in: plain URLs, vfuto:// and grayjay://plugin/<url>.
+            val u = raw.trim()
+                .replaceFirst(Regex("^grayjay://plugin/", RegexOption.IGNORE_CASE), "")
+                .replaceFirst(Regex("^vfuto://", RegexOption.IGNORE_CASE), "https://")
             val uri = try { java.net.URI(u) } catch (e: Exception) { throw IllegalArgumentException("Not a link") }
             require(uri.scheme?.lowercase() in setOf("http", "https") && !uri.host.isNullOrEmpty() && u.length <= 2048) { "Not a web link" }
             return u
