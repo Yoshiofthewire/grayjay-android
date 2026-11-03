@@ -10,6 +10,7 @@ import org.junit.Before
 import org.junit.Test
 import org.mockito.Mockito
 import java.net.HttpURLConnection
+import java.net.InetAddress
 import java.net.URL
 
 class TvCompanionServerTests {
@@ -18,7 +19,7 @@ class TvCompanionServerTests {
 
     @Before
     fun setUp() {
-        server = TvCompanionServer(Mockito.mock(Context::class.java)) { requests.add(it); "ok" }
+        server = TvCompanionServer(Mockito.mock(Context::class.java), InetAddress.getLoopbackAddress()) { requests.add(it); "ok" }
         server.start()
     }
 
@@ -76,8 +77,16 @@ class TvCompanionServerTests {
     }
 
     @Test
+    fun listensOnlyOnTheBoundAddress() {
+        assertTrue(server.url!!.startsWith("http://127.0.0.1:${server.port}/#"))
+        // Bound to loopback here, so the machine's LAN address must refuse the connection.
+        val lan = TvCompanionServer.lanAddress() ?: return
+        assertThrows(java.net.ConnectException::class.java) { java.net.Socket(lan, server.port).close() }
+    }
+
+    @Test
     fun tokensDifferPerSession() {
-        val other = TvCompanionServer(Mockito.mock(Context::class.java)) { "ok" }
+        val other = TvCompanionServer(Mockito.mock(Context::class.java), InetAddress.getLoopbackAddress()) { "ok" }
         assertNotEquals(server.token, other.token)
         assertEquals(32, server.token.length)
     }

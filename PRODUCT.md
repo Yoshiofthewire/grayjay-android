@@ -43,6 +43,9 @@ from every installed source, and nothing is tied to an account on Grayjay's side
   stops when the TV app leaves the foreground, on "Stop sharing", or after 15 idle minutes,
   and requires a random per-session secret carried in the QR code. Every plugin install
   still needs confirmation on the TV, which shows the plugin's permissions and warnings.
+  Accepted v1 risk: the page is plain HTTP, so someone sniffing the same Wi-Fi during a session
+  could replay the secret. They still cannot install code without the TV-side confirmation.
+  Sources whose signature does not match their script are refused outright.
 - Existing Kotlin View-based app; the TV UI reuses its state, plugin and player layers.
 
 ## Brand Commitments

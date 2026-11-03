@@ -10,6 +10,9 @@ import com.futo.platformplayer.states.StatePlatform
 import com.futo.platformplayer.states.StateSubscriptions
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import java.net.Inet4Address
+import java.net.InetAddress
+import java.net.NetworkInterface
 import java.security.MessageDigest
 import java.security.SecureRandom
 
@@ -21,7 +24,12 @@ import java.security.SecureRandom
  * or throws [IllegalArgumentException] with a user-facing reason. Nothing that runs code
  * (plugin installs) happens without a confirmation on the TV.
  */
-class TvCompanionServer(private val context: Context, private val onRequest: (Request) -> String) {
+class TvCompanionServer(
+    private val context: Context,
+    /** Interface to listen on; defaults to the TV's LAN address so nothing else can reach it. */
+    private val bindAddress: InetAddress? = null,
+    private val onRequest: (Request) -> String,
+) {
     sealed class Request {
         data class InstallPlugin(val url: String) : Request()
         data class Follow(val url: String) : Request()
@@ -41,6 +49,9 @@ class TvCompanionServer(private val context: Context, private val onRequest: (Re
     val token: String = ByteArray(16).also { SecureRandom().nextBytes(it) }.joinToString("") { "%02x".format(it) }
     private val tokenBytes = token.toByteArray()
 
+    /** Runs (on a server thread) when a phone opens the page with a valid secret. */
+    @Volatile var onConnected: (() -> Unit)? = null
+
     /** Time of the last authorized request, for the idle timeout. */
     @Volatile var lastRequestAt = System.currentTimeMillis()
         private set
@@ -54,9 +65,11 @@ class TvCompanionServer(private val context: Context, private val onRequest: (Re
     @Synchronized
     fun start() {
         if (server != null) return
-        val s = ManagedHttpServer(0)
+        val address = bindAddress ?: lanAddress() ?: return
+        val s = ManagedHttpServer(0, address)
         s.addHandler(HttpFunctionHandler("GET", "/") { it.respondCode(200, page(), "text/html; charset=utf-8") }.withHeader("Cache-Control", "no-store"))
         api(s, "GET", "/api/info") {
+            onConnected?.invoke()
             it.respondJson(200, Info(StatePlatform.instance.getEnabledClients().map { c -> Source(c.name) }))
         }
         api(s, "GET", "/api/creators") {
@@ -77,7 +90,7 @@ class TvCompanionServer(private val context: Context, private val onRequest: (Re
         }
         s.start()
         server = s
-        url = s.getAddress().takeIf { it.isNotBlank() }?.let { "http://$it:${s.port}/#$token" }
+        url = "http://${address.hostAddress}:${s.port}/#$token"
         Logger.i(TAG, "Companion server on port ${s.port}")
     }
 
@@ -132,6 +145,14 @@ class TvCompanionServer(private val context: Context, private val onRequest: (Re
             require(uri.scheme?.lowercase() in setOf("http", "https") && !uri.host.isNullOrEmpty() && u.length <= 2048) { "Not a web link" }
             return u
         }
+
+        /** First site-local IPv4 address (Wi-Fi or Ethernet), or null when the TV is offline. */
+        fun lanAddress(): InetAddress? = NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
+            .filter { it.isUp && !it.isLoopback && !it.isVirtual }
+            // Wi-Fi and Ethernet first; VPN, Docker and other bridges only as a last resort.
+            .sortedBy { if (it.name.startsWith("wlan") || it.name.startsWith("eth")) 0 else 1 }
+            .flatMap { it.inetAddresses.toList() }
+            .firstOrNull { it is Inet4Address && it.isSiteLocalAddress }
 
         fun decode(v: String?): String = java.net.URLDecoder.decode(v ?: "", "UTF-8")
     }

@@ -13,7 +13,7 @@
     <string name="tv_row_results">Top results</string>
     <string name="tv_row_videos">Videos</string>
     <string name="tv_row_loading">Loading…</string>
-    <string name="tv_row_failed">Couldn\'t load. Select a card to retry later.</string>
+    <string name="tv_row_failed">Couldn\'t load this source</string>
     <string name="tv_row_empty">Nothing here yet</string>
     <string name="tv_new_count">%1$d new</string>
 
@@ -23,11 +23,16 @@
     <string name="tv_no_subs_body">Follow creators from any source on your phone, and their new videos land here.</string>
     <string name="tv_search_empty_title">Search every source at once</string>
     <string name="tv_search_empty_body">Type with the remote, or send a search from your phone.</string>
+    <string name="tv_search_failed">Search didn\'t work. Check the TV\'s connection and try again.</string>
+    <string name="tv_load_failed_body">A source didn\'t respond. Check the TV\'s connection and try again.</string>
     <string name="tv_search_none">No results for “%1$s”</string>
     <string name="tv_search_hint">Search videos and creators</string>
     <string name="tv_search_phone">Type on phone</string>
     <string name="tv_load_failed_title">Couldn\'t load this</string>
     <string name="tv_retry">Try again</string>
+    <string name="tv_go_to_channel">Go to channel</string>
+    <string name="tv_player_next">Play next</string>
+    <string name="tv_player_back">Back</string>
 
     <string name="tv_follow">Follow</string>
     <string name="tv_following">Following</string>
@@ -40,6 +45,7 @@
     <string name="tv_companion_body">Scan with your phone camera to follow creators, add sources, search, or send a link to the TV. Your phone and TV need to be on the same Wi-Fi.</string>
     <string name="tv_companion_qr_desc">QR code for the phone companion page</string>
     <string name="tv_companion_waiting">Waiting for your phone</string>
+    <string name="tv_companion_connected">Phone connected</string>
     <string name="tv_companion_active">Phone connected. Last: %1$s</string>
     <string name="tv_companion_no_network">Connect the TV to Wi-Fi or Ethernet to use your phone.</string>
     <string name="tv_companion_stop">Stop sharing</string>
@@ -52,25 +58,21 @@
     <string name="tv_plugin_third_party">Third-party source, not reviewed by FUTO</string>
     <string name="tv_plugin_replaces">Replaces the %1$s source you already have.</string>
     <string name="tv_plugin_access">Can connect to</string>
+    <string name="tv_plugin_access_any">Any website (unrestricted)</string>
     <string name="tv_plugin_access_more">and %1$d more</string>
     <string name="tv_plugin_cancel">Don\'t add</string>
     <string name="tv_plugin_install">Add source</string>
-    <string name="tv_plugin_fetching">Checking the source your phone sent…</string>
-    <string name="tv_plugin_fetch_failed">Couldn\'t read that source: %1$s</string>
     <string name="tv_plugin_installing">Adding %1$s…</string>
     <string name="tv_plugin_installed">%1$s added. It\'s on Home now.</string>
-    <string name="tv_plugin_failed">Couldn\'t add %1$s: %2$s</string>
+    <string name="tv_plugin_failed">Couldn\'t add %1$s. Try again from your phone.</string>
 
     <string name="tv_upnext_in">Up next in %1$ds</string>
-    <string name="tv_upnext">Up next</string>
     <string name="tv_upnext_play">Play now</string>
     <string name="tv_upnext_cancel">Cancel</string>
     <string name="tv_player_loading">Loading video…</string>
-    <string name="tv_player_failed">This video can\'t play: %1$s</string>
+    <string name="tv_player_failed">This video can\'t play right now. The source may be down or the video unavailable.</string>
     <string name="tv_play_pause">Play or pause</string>
     <string name="tv_rewind">Rewind</string>
     <string name="tv_forward">Fast forward</string>
     <string name="tv_live">LIVE</string>
-    <string name="tv_opening_link">Opening the link from your phone</string>
-    <string name="tv_exit_hint">Press Back again to exit</string>
 </resources>

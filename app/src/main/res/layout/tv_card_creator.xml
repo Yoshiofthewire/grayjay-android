@@ -20,6 +20,16 @@
             android:contentDescription="@null"
             android:scaleType="centerCrop" />
 
+        <ImageView
+            android:id="@+id/creator_source"
+            android:layout_width="26dp"
+            android:layout_height="26dp"
+            android:layout_gravity="bottom|end"
+            android:background="@drawable/tv_source_disc"
+            android:contentDescription="@null"
+            android:padding="5dp"
+            android:visibility="gone" />
+
         <View
             android:id="@+id/creator_new"
             android:layout_width="16dp"
@@ -39,5 +49,5 @@
         android:duplicateParentState="true"
         android:gravity="center_horizontal"
         android:textColor="@color/tv_card_title"
-        android:textSize="13sp" />
+        android:textSize="14sp" />
 </LinearLayout>

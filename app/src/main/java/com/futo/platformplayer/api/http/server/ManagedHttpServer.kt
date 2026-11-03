@@ -19,7 +19,7 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.stream.IntStream.range
 
-class ManagedHttpServer(private val _requestedPort: Int = 0) {
+class ManagedHttpServer(private val _requestedPort: Int = 0, private val _bindAddress: java.net.InetAddress? = null) {
     private val _client : ManagedHttpClient = ManagedHttpClient();
     private val _logVerbose: Boolean = false;
 
@@ -40,7 +40,7 @@ class ManagedHttpServer(private val _requestedPort: Int = 0) {
         if (active)
             return;
 
-        val socket = ServerSocket(_requestedPort);
+        val socket = ServerSocket(_requestedPort, 50, _bindAddress);
         _serverSocket = socket;
         port = socket.localPort;
         active = true;

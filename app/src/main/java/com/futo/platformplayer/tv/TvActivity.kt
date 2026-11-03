@@ -14,6 +14,7 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
@@ -52,6 +53,8 @@ class TvActivity : AppCompatActivity() {
     private var companion: TvCompanionServer? = null
     var companionLastAction: String? = null
         private set
+    var phoneConnected = false
+        private set
 
     val currentTab: Int get() = stack.lastOrNull()?.tab ?: TAB_HOME
 
@@ -89,20 +92,36 @@ class TvActivity : AppCompatActivity() {
         }
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) { override fun handleOnBackPressed() = back() })
 
-                StateSubscriptions.instance.onSubscriptionsChanged.subscribe(this) { _, _ -> tabs.remove(TAB_SUBSCRIPTIONS)?.onDestroyed() }
+        StateSubscriptions.instance.onSubscriptionsChanged.subscribe(this) { _, _ ->
+            runOnUiThread { (tabs[TAB_SUBSCRIPTIONS] as? TvSubscriptionsScreen)?.let { if (stack.lastOrNull() === it) it.load() else it.dirty = true } }
+        }
 
+        // The phone link never outlives the TV app being on screen (player included).
+        TvForeground.onBackground = { stopCompanion() }
         showTab(TAB_HOME)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        TvForeground.started(this)
+    }
+
+    // The player's "Go to channel" relaunches this singleTask activity with a channel URL.
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        intent.getStringExtra(EXTRA_CHANNEL)?.let { openChannel(it) }
     }
 
     override fun onStop() {
         super.onStop()
-        // The phone link never outlives the TV app being on screen.
-        stopCompanion()
+        TvForeground.stopped(this)
     }
 
     override fun onDestroy() {
         super.onDestroy()
         handler.removeCallbacksAndMessages(null)
+        stopCompanion()
+        TvForeground.onBackground = null
         StateSubscriptions.instance.onSubscriptionsChanged.remove(this)
         stack.forEach { it.onDestroyed() }
         StateApp.instance.mainAppDestroyed(this, mainId)
@@ -120,6 +139,7 @@ class TvActivity : AppCompatActivity() {
             }
         }
         stack.lastOrNull()?.onHidden()
+        if (currentTab == TAB_SUBSCRIPTIONS && tab != TAB_SUBSCRIPTIONS) (tabs[TAB_SUBSCRIPTIONS] as? TvSubscriptionsScreen)?.markSeen()
         stack.filter { it !in tabs.values }.forEach { it.onDestroyed() }
         stack.clear()
         content.removeAllViews()
@@ -197,9 +217,13 @@ class TvActivity : AppCompatActivity() {
             // Right from the rail always lands in content, even when it is still loading.
             if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && event.action == KeyEvent.ACTION_DOWN) stack.lastOrNull()?.view?.requestFocus() ?: false else false
         }
+        item.id = View.generateViewId()
         rail.addView(item)
         railItems.add(item)
-        if (railItems.size > 1) item.nextFocusUpId = View.NO_ID
+        // Up from the first item and down from the last stay in the rail.
+        railItems.first().nextFocusUpId = railItems.first().id
+        railItems.forEach { it.nextFocusDownId = View.NO_ID }
+        item.nextFocusDownId = item.id
     }
 
     private fun isInRail(v: View): Boolean {
@@ -238,10 +262,12 @@ class TvActivity : AppCompatActivity() {
 
     /** Starts (or keeps) the companion server; returns the QR URL, or null without a LAN address. */
     fun startCompanion(): String? {
-        val server = companion ?: TvCompanionServer(this, ::onCompanionRequest).also {
+        val server = companion ?: TvCompanionServer(this, onRequest = ::onCompanionRequest).also {
+            it.onConnected = { runOnUiThread { onPhoneConnected() } }
             try { it.start() } catch (e: Throwable) { Logger.e(TAG, "Companion server failed to start", e); return null }
             companion = it
             companionLastAction = null
+            phoneConnected = false
             handler.postDelayed(idleCheck, IDLE_CHECK_MS)
         }
         return server.url ?: run { stopCompanion(); null }
@@ -250,6 +276,7 @@ class TvActivity : AppCompatActivity() {
     fun stopCompanion() {
         val server = companion ?: return
         companion = null
+        phoneConnected = false
         handler.removeCallbacks(idleCheck)
         Thread { server.stop() }.start()
         railItems.firstOrNull { it.tag == TAB_PHONE }?.findViewById<View>(R.id.rail_dot)?.visibility = View.GONE
@@ -292,16 +319,24 @@ class TvActivity : AppCompatActivity() {
             }
             is TvCompanionServer.Request.InstallPlugin -> {
                 val (config, script) = fetchPlugin(request.url)
-                onMain { confirmPlugin(config, script) }
+                onMain {
+                    // Consent needs the TV's full attention: close the player (singleTask clears it) before asking.
+                    if (!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))
+                        startActivity(Intent(this, TvActivity::class.java))
+                    confirmPlugin(config, script)
+                }
                 "Check your TV to confirm adding ${config.name}"
             }
         }
         companionLastAction = message
-        runOnUiThread {
-            (tabs[TAB_PHONE] as? TvCompanionScreen)?.setStatus(message)
-            railItems.firstOrNull { it.tag == TAB_PHONE }?.findViewById<View>(R.id.rail_dot)?.visibility = View.VISIBLE
-        }
+        runOnUiThread { onPhoneConnected() }
         return message
+    }
+
+    private fun onPhoneConnected() {
+        phoneConnected = true
+        (tabs[TAB_PHONE] as? TvCompanionScreen)?.setStatus(companionLastAction, connected = true)
+        railItems.firstOrNull { it.tag == TAB_PHONE }?.findViewById<View>(R.id.rail_dot)?.visibility = View.VISIBLE
     }
 
     private fun <T> onMain(block: () -> T): T {
@@ -311,13 +346,29 @@ class TvActivity : AppCompatActivity() {
     }
 
     private fun fetchPlugin(url: String): Pair<SourcePluginConfig, String> {
-        val config = try { StatePlugins.instance.requestConfig(url) } catch (e: Throwable) {
+        val client = ManagedHttpClient().apply { setTimeout(FETCH_TIMEOUT_MS) }
+        val config = try {
+            client.get(url).use { resp ->
+                val json = resp.body?.string()
+                require(resp.isOk && !json.isNullOrEmpty())
+                SourcePluginConfig.fromJson(json, url)
+            }
+        } catch (e: Throwable) {
             throw IllegalArgumentException("That link isn't a Grayjay source")
         }
-        val resp = ManagedHttpClient().get(config.absoluteScriptUrl)
-        val script = resp.body?.string()
-        require(resp.isOk && !script.isNullOrEmpty()) { "Couldn't download ${config.name}'s script" }
-        return config to script!!
+        val scriptUrl = TvCompanionServer.httpUrl(config.absoluteScriptUrl)
+        val script = try {
+            client.get(scriptUrl).use { resp ->
+                val len = resp.body?.contentLength() ?: -1
+                if (!resp.isOk || len > MAX_SCRIPT_BYTES) null
+                else resp.body?.byteStream()?.use { readCapped(it, MAX_SCRIPT_BYTES) }?.toString(Charsets.UTF_8)?.takeIf { it.isNotEmpty() }
+            }
+        } catch (e: Throwable) { null } ?: throw IllegalArgumentException("Couldn't download ${config.name}'s code")
+        // A signature that doesn't match the script means it was altered: never offer it.
+        require(config.scriptSignature.isNullOrEmpty() || config.validate(script)) {
+            "${config.name}'s signature doesn't match its code, so it can't be added"
+        }
+        return config to script
     }
 
     private var pluginDialog: Dialog? = null
@@ -348,7 +399,9 @@ class TvActivity : AppCompatActivity() {
                 setPadding(0, (top * resources.displayMetrics.density).toInt(), 0, 0)
             })
         }
-        line(getString(if (config.isOfficialAuthor()) R.string.tv_plugin_official else R.string.tv_plugin_third_party), R.color.white, bold = true, top = 0)
+        // fetchPlugin already rejected mismatched signatures; still check here so the label can never outrun the proof.
+        val official = config.isOfficialAuthor() && config.validate(script)
+        line(getString(if (official) R.string.tv_plugin_official else R.string.tv_plugin_third_party), R.color.white, bold = true, top = 0)
         StatePlugins.instance.getPlugin(config.id)?.let { line(getString(R.string.tv_plugin_replaces, it.config.name)) }
         if (config.description.isNotBlank()) line(config.description)
         for ((title, body) in config.getWarnings(script)) {
@@ -356,10 +409,13 @@ class TvActivity : AppCompatActivity() {
             line(body, top = 4)
         }
         val hosts = config.allowUrls
-        if (hosts.isNotEmpty() && hosts.none { it == "everywhere" }) {
+        if (hosts.isNotEmpty()) {
             line(getString(R.string.tv_plugin_access), R.color.white, bold = true, top = 16)
-            val shown = hosts.take(6).joinToString(", ")
-            line(if (hosts.size > 6) "$shown " + getString(R.string.tv_plugin_access_more, hosts.size - 6) else shown, top = 4)
+            if (hosts.any { it == "everywhere" }) line(getString(R.string.tv_plugin_access_any), R.color.tv_warn, bold = true, top = 4)
+            else {
+                val shown = hosts.take(6).joinToString(", ")
+                line(if (hosts.size > 6) "$shown " + getString(R.string.tv_plugin_access_more, hosts.size - 6) else shown, top = 4)
+            }
         }
 
         val cancel = view.findViewById<View>(R.id.plugin_cancel)
@@ -371,13 +427,24 @@ class TvActivity : AppCompatActivity() {
         dialog.setOnDismissListener { if (pluginDialog === dialog) pluginDialog = null }
         dialog.show()
         cancel.requestFocus()
+        // Long warnings scroll inside a capped area so the two buttons never leave the screen.
+        val scroll = view.findViewById<ScrollView>(R.id.plugin_scroll)
+        val maxHeight = (resources.displayMetrics.heightPixels * 0.45).toInt()
+        scroll.post {
+            if (scroll.height > maxHeight) {
+                scroll.layoutParams = scroll.layoutParams.apply { height = maxHeight }
+                scroll.isFocusable = true
+                scroll.foreground = ContextCompat.getDrawable(this, R.drawable.tv_card_frame)
+            }
+        }
     }
 
     private fun installPlugin(config: SourcePluginConfig, script: String) {
         toast(getString(R.string.tv_plugin_installing, config.name))
         StatePlugins.instance.installPluginBackground(this, lifecycleScope, config, script, { _, _ -> }) { ex ->
             if (ex != null) {
-                toast(getString(R.string.tv_plugin_failed, config.name, ex.message ?: ex.javaClass.simpleName))
+                Logger.e(TAG, "Install failed", ex)
+                toast(getString(R.string.tv_plugin_failed, config.name))
                 return@installPluginBackground
             }
             StatePlugins.instance.clearUpdateAvailable(config)
@@ -387,20 +454,46 @@ class TvActivity : AppCompatActivity() {
                 (tabs[TAB_HOME] as? TvHomeScreen)?.load()
                 toast(getString(R.string.tv_plugin_installed, config.name))
                 companionLastAction = "Added ${config.name}"
-                (tabs[TAB_PHONE] as? TvCompanionScreen)?.setStatus(companionLastAction)
+                onPhoneConnected()
             }
         }
     }
 
     companion object {
         private const val TAG = "TvActivity"
+        const val EXTRA_CHANNEL = "channel"
         const val TAB_HOME = 0
         const val TAB_SUBSCRIPTIONS = 1
         const val TAB_SEARCH = 2
         const val TAB_PHONE = 3
         private const val IDLE_TIMEOUT_MS = 15 * 60 * 1000L
         private const val IDLE_CHECK_MS = 60 * 1000L
+        private const val FETCH_TIMEOUT_MS = 10_000L
+        private const val MAX_SCRIPT_BYTES = 5L * 1024 * 1024
+
+        /** Reads at most [max] bytes; null when the stream is longer. */
+        fun readCapped(input: java.io.InputStream, max: Long): ByteArray? {
+            val out = java.io.ByteArrayOutputStream()
+            val buf = ByteArray(16 * 1024)
+            while (true) {
+                val n = input.read(buf)
+                if (n < 0) return out.toByteArray()
+                if (out.size() + n > max) return null
+                out.write(buf, 0, n)
+            }
+        }
     }
+}
+
+/**
+ * Counts started TV activities. Android starts the next activity before stopping the previous
+ * one, so the count only reaches zero when Grayjay TV really leaves the screen.
+ */
+object TvForeground {
+    private val started = mutableSetOf<Any>()
+    var onBackground: (() -> Unit)? = null
+    fun started(a: Any) { started.add(a) }
+    fun stopped(a: Any) { started.remove(a); if (started.isEmpty()) onBackground?.invoke() }
 }
 
 /** Up-next list handed from the row the viewer played from to the player. */

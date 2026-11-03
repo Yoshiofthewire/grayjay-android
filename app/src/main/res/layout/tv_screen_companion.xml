@@ -63,7 +63,7 @@
                 android:id="@+id/companion_dot"
                 android:layout_width="10dp"
                 android:layout_height="10dp"
-                android:background="@drawable/tv_new_dot" />
+                android:background="@drawable/tv_status_off" />
 
             <TextView
                 android:id="@+id/companion_status"

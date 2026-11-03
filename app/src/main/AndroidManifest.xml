@@ -170,6 +170,7 @@
         </activity>
         <activity
             android:name=".tv.TvPlayerActivity"
+            android:launchMode="singleTop"
             android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
             android:exported="false"
             android:screenOrientation="landscape"

@@ -1,6 +1,7 @@
 package com.futo.platformplayer.tv
 
 import android.content.Context
+import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -42,11 +43,19 @@ class TvPlayerActivity : AppCompatActivity() {
     private var loadJob: Job? = null
     private var countdown = 0
     private var backHidesControls = false
+    private var currentUrl: String? = null
 
     private val listener = object : Player.Listener {
         override fun onPlaybackStateChanged(state: Int) {
             if (state == Player.STATE_READY) loading.visibility = View.GONE
             if (state == Player.STATE_ENDED) { saveHistory(); showUpNext() }
+        }
+        override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+            // The base player reloads these live-stream errors itself.
+            if (error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW ||
+                error.cause is androidx.media3.exoplayer.hls.playlist.HlsPlaylistTracker.PlaylistStuckException) return
+            Logger.w(TAG, "Playback error ${error.errorCodeName}", error)
+            showError()
         }
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             // Keep the screen on only while something is actually playing.
@@ -70,14 +79,28 @@ class TvPlayerActivity : AppCompatActivity() {
         upNext = findViewById(R.id.tv_upnext)
         findViewById<View>(R.id.tv_upnext_play).setOnClickListener { playNext() }
         findViewById<View>(R.id.tv_upnext_cancel).setOnClickListener { finish() }
+        findViewById<View>(R.id.tv_player_retry).setOnClickListener { currentUrl?.let(::load) }
+        findViewById<View>(R.id.tv_player_next).setOnClickListener { playNext() }
+        findViewById<View>(R.id.tv_player_back).setOnClickListener { finish() }
 
         player.attach()
         player.exoPlayer?.player?.addListener(listener)
         load(intent.getStringExtra(EXTRA_URL) ?: return finish())
     }
 
+    // singleTop: a new link from the phone replaces what is playing instead of stacking players.
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val url = intent.getStringExtra(EXTRA_URL) ?: return
+        saveHistory()
+        load(url)
+    }
+
     private fun load(url: String) {
+        currentUrl = url
         hideUpNext()
+        findViewById<View>(R.id.tv_player_actions).visibility = View.GONE
         loading.visibility = View.VISIBLE
         findViewById<View>(R.id.tv_player_spinner).visibility = View.VISIBLE
         message.setText(R.string.tv_player_loading)
@@ -105,15 +128,28 @@ class TvPlayerActivity : AppCompatActivity() {
                 throw e
             } catch (e: Throwable) {
                 Logger.e(TAG, "Failed to play $url", e)
-                loading.visibility = View.VISIBLE
-                findViewById<View>(R.id.tv_player_spinner).visibility = View.GONE
-                message.text = getString(R.string.tv_player_failed, e.message ?: e.javaClass.simpleName)
-                if (TvQueue.peek() != null) handler.postDelayed({ showUpNext() }, 2500)
+                showError()
             }
         }
     }
 
+    /** Failed loads and stream errors wait for the viewer: retry, skip, or leave. Nothing auto-advances. */
+    private fun showError() {
+        player.playerView.hideController()
+        loading.visibility = View.VISIBLE
+        findViewById<View>(R.id.tv_player_spinner).visibility = View.GONE
+        message.setText(R.string.tv_player_failed)
+        findViewById<View>(R.id.tv_player_actions).visibility = View.VISIBLE
+        findViewById<View>(R.id.tv_player_next).visibility = if (TvQueue.peek() != null) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.tv_player_retry).requestFocus()
+    }
+
     private fun bindTitle(d: IPlatformVideoDetails) {
+        player.playerView.findViewById<View>(R.id.tv_controls_channel)?.setOnClickListener {
+            saveHistory()
+            // TvActivity is singleTask: this closes the player and opens the channel there.
+            startActivity(Intent(this, TvActivity::class.java).putExtra(TvActivity.EXTRA_CHANNEL, d.author.url))
+        }
         player.playerView.findViewById<TextView>(R.id.tv_controls_title)?.text = d.name
         val source = d.id.pluginId?.let { id -> StatePlatform.instance.getAvailableClients().find { it.id == id }?.name }
         player.playerView.findViewById<TextView>(R.id.tv_controls_meta)?.text =
@@ -162,12 +198,21 @@ class TvPlayerActivity : AppCompatActivity() {
     // Keys
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (findViewById<View>(R.id.tv_player_actions).visibility == View.VISIBLE) return super.dispatchKeyEvent(event)
         if (event.action == KeyEvent.ACTION_DOWN && upNext.visibility != View.VISIBLE) {
             val exo = player.exoPlayer?.player
             when (event.keyCode) {
                 KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> { exo?.let { if (it.isPlaying) it.pause() else it.play() }; return true }
                 KeyEvent.KEYCODE_MEDIA_PLAY -> { exo?.play(); return true }
                 KeyEvent.KEYCODE_MEDIA_PAUSE -> { exo?.pause(); return true }
+            }
+            // Controls hidden: left/right seek straight away, like YouTube, Netflix and Plex.
+            if (!player.playerView.isControllerFullyVisible && exo != null && !exo.isCurrentMediaItemLive &&
+                (event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT || event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT)) {
+                val delta = if (event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) SEEK_MS else -SEEK_MS
+                exo.seekTo((exo.currentPosition + delta).coerceIn(0, exo.duration.coerceAtLeast(0)))
+                player.playerView.showController()
+                return true
             }
             // Controls hidden: OK toggles playback without first revealing the controller, like other TV apps.
             if (!player.playerView.isControllerFullyVisible && (event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER || event.keyCode == KeyEvent.KEYCODE_ENTER)) {
@@ -202,8 +247,14 @@ class TvPlayerActivity : AppCompatActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        TvForeground.started(this)
+    }
+
     override fun onStop() {
         super.onStop()
+        TvForeground.stopped(this)
         if (!::player.isInitialized) return
         saveHistory()
         player.exoPlayer?.player?.pause()
@@ -222,5 +273,6 @@ class TvPlayerActivity : AppCompatActivity() {
         private const val TAG = "TvPlayerActivity"
         const val EXTRA_URL = "url"
         private const val UP_NEXT_SECONDS = 10
+        private const val SEEK_MS = 10_000L
     }
 }

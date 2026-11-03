@@ -13,6 +13,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.leanback.widget.VerticalGridView
 import com.bumptech.glide.Glide
 import com.futo.platformplayer.R
+import com.futo.platformplayer.api.media.IPlatformClient
 import com.futo.platformplayer.api.media.models.channels.IPlatformChannel
 import com.futo.platformplayer.api.media.models.contents.IPlatformContent
 import com.futo.platformplayer.api.media.platforms.js.JSClient
@@ -68,7 +69,11 @@ abstract class TvRowsScreen(act: TvActivity, private val header: View? = null, n
     private fun onRowLoaded(row: TvRow) {
         if (!focusOnLoad || row.videos.isEmpty() && row.creators.isNullOrEmpty()) return
         focusOnLoad = false
-        if (act.isContentFocusWanted()) grid.post { if (grid.requestFocus()) act.contentFocused() }
+        if (act.isContentFocusWanted()) grid.post {
+            // Land on the first shelf, not the header (a search box would trap the D-pad).
+            if (header != null) grid.selectedPosition = 1
+            if (grid.requestFocus()) act.contentFocused()
+        }
     }
 
     protected fun showMessage(title: String, body: String? = null, action: String? = null, keepHeader: Boolean = false, onAction: (() -> Unit)? = null) {
@@ -102,11 +107,27 @@ class TvHomeScreen(act: TvActivity) : TvRowsScreen(act) {
         val firstPages = clients.associateWith { c ->
             act.lifecycleScope.async(Dispatchers.IO) { c.getHome().let { it to it.getResults().toList() } }
         }
+        // First load shares one request per source; a retry after a failure asks again.
+        suspend fun page(c: IPlatformClient) = try { firstPages.getValue(c).await() } catch (e: Throwable) {
+            withContext(Dispatchers.IO) { c.getHome().let { it to it.getResults().toList() } }
+        }
+        val mixed = clients.size > 1
+        fun lead(first: List<IPlatformContent>) = first.filter(TvRowsAdapter::playable).take(PER_SOURCE_IN_MIX)
         val across = TvRow(string(R.string.tv_row_across), hero = true, load = {
-            val pages = firstPages.values.mapNotNull { runCatching { it.await().second.filter(TvRowsAdapter::playable) }.getOrNull() }
+            val pages = clients.mapNotNull { c -> runCatching { lead(page(c).second) }.getOrNull() }
+            check(pages.isNotEmpty()) { "every source failed" }
             interleave(pages)
         })
-        val shelves = clients.map { c -> TvRow(c.name, icon = c.icon, hero = clients.size == 1, load = { firstPages.getValue(c).await().first }) }
+        // Shelves skip what the mixed row already shows, so nothing appears twice.
+        val shelves = clients.map { c ->
+            lateinit var row: TvRow
+            row = TvRow(c.name, icon = c.icon, hero = !mixed, load = {
+                val (pager, first) = page(c)
+                if (mixed) row.exclude = lead(first).map { it.url }.toSet()
+                pager
+            })
+            row
+        }
         // With one source the mixed row would only repeat its shelf.
         val rows = if (clients.size == 1) shelves else listOf(across) + shelves
         act.lifecycleScope.launch {
@@ -122,6 +143,8 @@ class TvHomeScreen(act: TvActivity) : TvRowsScreen(act) {
         .take(20)
 
     companion object {
+        private const val PER_SOURCE_IN_MIX = 4
+
         /** Round-robin so no single source dominates the mixed row. */
         fun <T> interleave(lists: List<List<T>>): List<T> {
             val out = mutableListOf<T>()
@@ -135,6 +158,12 @@ class TvHomeScreen(act: TvActivity) : TvRowsScreen(act) {
 /** Subscriptions as shelves: everything new, then per source, then the people you follow. */
 class TvSubscriptionsScreen(act: TvActivity) : TvRowsScreen(act, newSince = lastSeen(act)) {
     override val tab = TvActivity.TAB_SUBSCRIPTIONS
+    /** Follows changed while this screen was hidden; reload when it shows again. */
+    var dirty = false
+
+    override fun onShown() {
+        if (dirty) { dirty = false; load() }
+    }
 
     init { load() }
 
@@ -155,21 +184,24 @@ class TvSubscriptionsScreen(act: TvActivity) : TvRowsScreen(act, newSince = last
                 }
                 val newAuthors = feed.filter { TvRowsAdapter.isNew(it, ctx) }.map { it.author.url }.toSet()
                 val following = subs.sortedBy { it.channel.name.lowercase() }
-                    .map { TvCreator(it.channel.name, it.channel.url, it.channel.thumbnail, it.channel.url in newAuthors) }
+                    .map { TvCreator(it.channel.name, it.channel.url, it.channel.thumbnail, it.channel.url in newAuthors, it.channel.id.pluginId) }
                     .sortedByDescending { it.hasNew }
+                // Latest leads; per-source shelves continue with what it doesn't show.
+                val latest = feed.take(LATEST_COUNT)
                 showRows(
-                    listOf(TvRow(string(R.string.tv_row_latest), hero = true, load = { feed })) +
-                        bySource(feed) +
+                    listOf(TvRow(string(R.string.tv_row_latest), hero = true, load = { latest })) +
+                        bySource(feed.drop(LATEST_COUNT)) +
                         TvRow(string(R.string.tv_row_following), creators = following)
                 )
             } catch (e: Throwable) {
                 Logger.e(TAG, "Subscriptions failed", e)
-                showMessage(string(R.string.tv_load_failed_title), e.message, string(R.string.tv_retry)) { load() }
+                showMessage(string(R.string.tv_load_failed_title), string(R.string.tv_load_failed_body), string(R.string.tv_retry)) { load() }
             }
         }
     }
 
-    override fun onHidden() {
+    /** Called when the viewer leaves the Subscriptions tab (not when a channel opens on top of it). */
+    fun markSeen() {
         act.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putLong(KEY_SEEN, System.currentTimeMillis()) }
     }
 
@@ -177,6 +209,7 @@ class TvSubscriptionsScreen(act: TvActivity) : TvRowsScreen(act, newSince = last
         private const val TAG = "TvSubscriptions"
         private const val PREFS = "tv"
         private const val KEY_SEEN = "subs_seen_at"
+        private const val LATEST_COUNT = 24
 
         fun lastSeen(c: Context): OffsetDateTime {
             val ms = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getLong(KEY_SEEN, 0)
@@ -228,7 +261,7 @@ class TvSearchScreen(act: TvActivity) : TvRowsScreen(act, header = LayoutInflate
                 val first = pager.getResults().filter(TvRowsAdapter::playable)
                 val rows = mutableListOf<TvRow>()
                 if (first.isNotEmpty()) rows.add(TvRow(string(R.string.tv_row_results), hero = true, load = { pager }))
-                if (creators.isNotEmpty()) rows.add(TvRow(string(R.string.tv_row_creators), creators = creators.map { TvCreator(it.name, it.url, it.thumbnail) }))
+                if (creators.isNotEmpty()) rows.add(TvRow(string(R.string.tv_row_creators), creators = creators.map { TvCreator(it.name, it.url, it.thumbnail, pluginId = it.id.pluginId) }))
                 rows.addAll(bySource(first))
                 if (rows.isEmpty()) {
                     showRows(listOf())
@@ -236,7 +269,8 @@ class TvSearchScreen(act: TvActivity) : TvRowsScreen(act, header = LayoutInflate
                 } else showRows(rows)
             } catch (e: Throwable) {
                 Logger.e(TAG, "Search failed", e)
-                showMessage(string(R.string.tv_load_failed_title), e.message, keepHeader = true)
+                lastQuery = null // let the same query run again
+                showMessage(string(R.string.tv_load_failed_title), string(R.string.tv_search_failed), string(R.string.tv_retry), keepHeader = true) { search(q) }
             }
         }
     }
@@ -280,7 +314,7 @@ class TvChannelScreen(act: TvActivity, private val url: String) : TvRowsScreen(a
                 if (act.isContentFocusWanted()) follow.post { if (follow.requestFocus()) act.contentFocused() }
             } catch (e: Throwable) {
                 Logger.e(TAG, "Channel failed", e)
-                showMessage(string(R.string.tv_load_failed_title), e.message, string(R.string.tv_retry)) { load() }
+                showMessage(string(R.string.tv_load_failed_title), string(R.string.tv_load_failed_body), string(R.string.tv_retry)) { load() }
             }
         }
     }
@@ -310,6 +344,7 @@ class TvCompanionScreen(act: TvActivity) : TvScreen(act) {
     override val tab = TvActivity.TAB_PHONE
     override val view: View = LayoutInflater.from(act).inflate(R.layout.tv_screen_companion, null)
     private val status: TextView = view.findViewById(R.id.companion_status)
+    private val dot: View = view.findViewById(R.id.companion_dot)
 
     init {
         view.findViewById<View>(R.id.companion_stop).setOnClickListener { act.stopCompanion(); act.showTab(TvActivity.TAB_HOME) }
@@ -331,7 +366,13 @@ class TvCompanionScreen(act: TvActivity) : TvScreen(act) {
         view.findViewById<View>(R.id.companion_stop).post { view.findViewById<View>(R.id.companion_stop).requestFocus() }
     }
 
-    fun setStatus(lastAction: String?) {
-        status.text = if (lastAction == null) act.getString(R.string.tv_companion_waiting) else act.getString(R.string.tv_companion_active, lastAction)
+    fun setStatus(lastAction: String?, connected: Boolean = act.phoneConnected) {
+        status.text = when {
+            lastAction != null -> act.getString(R.string.tv_companion_active, lastAction)
+            connected -> act.getString(R.string.tv_companion_connected)
+            else -> act.getString(R.string.tv_companion_waiting)
+        }
+        // Grey while waiting, green once a phone has the page open.
+        dot.setBackgroundResource(if (connected) R.drawable.tv_status_on else R.drawable.tv_status_off)
     }
 }

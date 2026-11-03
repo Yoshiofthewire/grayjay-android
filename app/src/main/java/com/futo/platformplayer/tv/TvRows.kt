@@ -27,7 +27,7 @@ import kotlinx.coroutines.withContext
 import java.time.OffsetDateTime
 
 /** A creator tile: a followed channel or a creator search result. */
-data class TvCreator(val name: String, val url: String, val thumbnail: String?, val hasNew: Boolean = false)
+data class TvCreator(val name: String, val url: String, val thumbnail: String?, val hasNew: Boolean = false, val pluginId: String? = null)
 
 /**
  * One shelf. Either [items] are known up front, or [load] fills them; a [pager]
@@ -49,6 +49,10 @@ class TvRow(
     var state = if (load == null) State.READY else State.LOADING
     var started = false
     var loadingMore = false
+    /** Last focused card, restored when the shelf scrolls back into view. */
+    var selected = 0
+    /** URLs another row already shows; set by [load] before it returns. */
+    var exclude: Set<String> = emptySet()
     internal var adapter: RecyclerView.Adapter<*>? = null
 }
 
@@ -105,17 +109,34 @@ class TvRowsAdapter(private val ctx: TvRowsContext, private val header: View? = 
             list.windowAlignmentOffset = view.resources.getDimensionPixelSize(R.dimen.tv_overscan_h)
             list.windowAlignmentOffsetPercent = HorizontalGridView.WINDOW_ALIGN_OFFSET_PERCENT_DISABLED
             list.itemAlignmentOffsetPercent = 0f
+            list.setOnChildSelectedListener { _, _, position, _ -> (bound as? TvRow)?.selected = position }
         }
+
+        private var bound: TvRow? = null
 
         fun bind(row: TvRow) {
             title.text = row.title
             if (row.icon != null) { icon.visibility = View.VISIBLE; row.icon.setImageView(icon) } else icon.visibility = View.GONE
 
-            val adapter = if (row.creators != null) CreatorAdapter(row.creators, ctx) else VideoAdapter(row, ctx, this@TvRowsAdapter)
+            bound = row
+            val adapter = when {
+                row.state == TvRow.State.FAILED -> RetryAdapter { retry(row) }
+                row.creators != null -> CreatorAdapter(row.creators, ctx)
+                else -> VideoAdapter(row, ctx, this@TvRowsAdapter)
+            }
             row.adapter = adapter
             list.adapter = adapter
+            if (adapter.itemCount > 0) list.selectedPosition = row.selected.coerceIn(0, adapter.itemCount - 1)
             updateStatus(row)
             if (!row.started) start(row)
+        }
+
+        private fun retry(row: TvRow) {
+            row.started = false
+            row.state = TvRow.State.LOADING
+            row.selected = 0
+            val i = rows.indexOf(row)
+            if (i >= 0) notifyItemChanged(i + offset)
         }
 
         private fun updateStatus(row: TvRow) {
@@ -145,9 +166,9 @@ class TvRowsAdapter(private val ctx: TvRowsContext, private val header: View? = 
                                 @Suppress("UNCHECKED_CAST")
                                 val p = r as IPager<IPlatformContent>
                                 row.pager = p
-                                p.getResults().filter(::playable)
+                                p.getResults().filter { playable(it) && it.url !in row.exclude }
                             }
-                            is List<*> -> r.filterIsInstance<IPlatformContent>().filter(::playable)
+                            is List<*> -> r.filterIsInstance<IPlatformContent>().filter { playable(it) && it.url !in row.exclude }
                             else -> listOf()
                         }
                     }
@@ -170,7 +191,7 @@ class TvRowsAdapter(private val ctx: TvRowsContext, private val header: View? = 
         row.loadingMore = true
         ctx.scope.launch {
             try {
-                val more = withContext(Dispatchers.IO) { pager.nextPage(); pager.getResults().filter(::playable) }
+                val more = withContext(Dispatchers.IO) { pager.nextPage(); pager.getResults().filter { playable(it) && it.url !in row.exclude } }
                 val start = row.videos.size
                 row.videos.addAll(more)
                 row.adapter?.notifyItemRangeInserted(start, more.size)
@@ -196,6 +217,14 @@ class TvRowsAdapter(private val ctx: TvRowsContext, private val header: View? = 
             return at.isAfter(since) && c.url !in ctx.seen
         }
     }
+}
+
+/** One focusable "Try again" in place of a shelf that failed to load. */
+private class RetryAdapter(private val onRetry: () -> Unit) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+    override fun getItemCount() = 1
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) =
+        object : RecyclerView.ViewHolder(LayoutInflater.from(parent.context).inflate(R.layout.tv_row_retry, parent, false)) {}
+    override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) = holder.itemView.setOnClickListener { onRetry() }
 }
 
 private class VideoAdapter(private val row: TvRow, private val ctx: TvRowsContext, private val rows: TvRowsAdapter) :
@@ -275,9 +304,12 @@ private class VideoAdapter(private val row: TvRow, private val ctx: TvRowsContex
             newDot.visibility = if (TvRowsAdapter.isNew(c, ctx)) View.VISIBLE else View.GONE
 
             itemView.setOnClickListener { ctx.onVideo(c, row) }
+            // Hold OK for the creator's channel.
+            itemView.setOnLongClickListener { ctx.onCreator(TvCreator(c.author.name, c.author.url, c.author.thumbnail, pluginId = c.id.pluginId)); true }
             itemView.setOnFocusChangeListener { v, focused ->
                 TvFocus.scale(v, focused)
-                if (focused && newDot.visibility == View.VISIBLE) {
+                // "New" clears once the viewer has looked and moved on, not when focus merely lands.
+                if (!focused && newDot.visibility == View.VISIBLE) {
                     ctx.seen.add(c.url)
                     newDot.animate().alpha(0f).setDuration(400).withEndAction { newDot.visibility = View.GONE; newDot.alpha = 1f }
                 }
@@ -296,9 +328,15 @@ private class CreatorAdapter(private val creators: List<TvCreator>, private val 
         private val avatar: ImageView = view.findViewById(R.id.creator_avatar)
         private val name: TextView = view.findViewById(R.id.creator_name)
         private val newDot: View = view.findViewById(R.id.creator_new)
+        private val source: ImageView = view.findViewById(R.id.creator_source)
 
         fun bind(c: TvCreator) {
             name.text = c.name
+            // Same name on several platforms is common; the source disc tells them apart.
+            val client = c.pluginId?.let { id -> StatePlatform.instance.getAvailableClients().find { it.id == id } }
+            source.visibility = if (client?.icon != null) View.VISIBLE else View.GONE
+            client?.icon?.setImageView(source)
+            itemView.contentDescription = listOfNotNull(c.name, client?.name).joinToString(", ")
             newDot.visibility = if (c.hasNew) View.VISIBLE else View.GONE
             Glide.with(avatar).load(c.thumbnail).placeholder(R.drawable.placeholder_channel_thumbnail).circleCrop().into(avatar)
             itemView.setOnClickListener { ctx.onCreator(c) }
