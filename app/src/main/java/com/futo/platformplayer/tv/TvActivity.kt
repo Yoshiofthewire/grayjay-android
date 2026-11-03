@@ -127,9 +127,13 @@ class TvActivity : AppCompatActivity() {
     private var pendingChannel: String? = null
 
     private fun setRailVisible(visible: Boolean) {
+        setRailOpen(false)
         rail.visibility = if (visible) View.VISIBLE else View.GONE
-        (content.layoutParams as ViewGroup.MarginLayoutParams).marginStart = if (visible) resources.getDimensionPixelSize(R.dimen.tv_rail_width) else 0
-        content.requestLayout()
+        // Set the params again rather than editing them in place: start margins only take effect once
+        // re-resolved to left/right, which setLayoutParams guarantees.
+        content.layoutParams = (content.layoutParams as ViewGroup.MarginLayoutParams).apply {
+            marginStart = if (visible) resources.getDimensionPixelSize(R.dimen.tv_rail_width) else 0
+        }
     }
 
     /** The source picker: step 1 of first-run setup, or reached later from an empty Home. */
