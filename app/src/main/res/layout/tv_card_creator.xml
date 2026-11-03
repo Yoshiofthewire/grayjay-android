@@ -8,15 +8,17 @@
     android:orientation="vertical">
 
     <FrameLayout
-        android:layout_width="88dp"
-        android:layout_height="88dp"
+        android:layout_width="98dp"
+        android:layout_height="98dp"
         android:duplicateParentState="true"
         android:foreground="@drawable/tv_avatar_frame">
 
+        <!-- 5dp inset: the focus ring sits outside the artwork, readable on white avatars. -->
         <ImageView
             android:id="@+id/creator_avatar"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
+            android:layout_margin="5dp"
             android:contentDescription="@null"
             android:scaleType="centerCrop" />
 

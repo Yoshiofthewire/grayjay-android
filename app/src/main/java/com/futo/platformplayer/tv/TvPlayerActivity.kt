@@ -99,6 +99,9 @@ class TvPlayerActivity : AppCompatActivity() {
 
     private fun load(url: String) {
         currentUrl = url
+        // The previous video stops now, so its end or errors can't act on the replacement.
+        video = null
+        player.exoPlayer?.player?.stop()
         hideUpNext()
         findViewById<View>(R.id.tv_player_actions).visibility = View.GONE
         loading.visibility = View.VISIBLE

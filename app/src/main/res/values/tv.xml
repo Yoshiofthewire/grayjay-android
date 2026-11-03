@@ -17,6 +17,7 @@
     <dimen name="tv_card">224dp</dimen>
     <dimen name="tv_card_gap">16dp</dimen>
     <dimen name="tv_dialog_width">600dp</dimen>
+    <dimen name="tv_ring_inset">5dp</dimen>
 
     <style name="Theme.FutoVideo.TV" parent="Theme.FutoVideo.NoActionBar">
         <item name="android:windowBackground">@color/black</item>

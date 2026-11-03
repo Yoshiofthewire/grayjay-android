@@ -186,13 +186,7 @@ class TvSubscriptionsScreen(act: TvActivity) : TvRowsScreen(act, newSince = last
                 val following = subs.sortedBy { it.channel.name.lowercase() }
                     .map { TvCreator(it.channel.name, it.channel.url, it.channel.thumbnail, it.channel.url in newAuthors, it.channel.id.pluginId) }
                     .sortedByDescending { it.hasNew }
-                // Latest leads; per-source shelves continue with what it doesn't show.
-                val latest = feed.take(LATEST_COUNT)
-                showRows(
-                    listOf(TvRow(string(R.string.tv_row_latest), hero = true, load = { latest })) +
-                        bySource(feed.drop(LATEST_COUNT)) +
-                        TvRow(string(R.string.tv_row_following), creators = following)
-                )
+                showRows(leadAndShelves(string(R.string.tv_row_latest), feed, chronological = true) + TvRow(string(R.string.tv_row_following), creators = following))
             } catch (e: Throwable) {
                 Logger.e(TAG, "Subscriptions failed", e)
                 showMessage(string(R.string.tv_load_failed_title), string(R.string.tv_load_failed_body), string(R.string.tv_retry)) { load() }
@@ -209,7 +203,6 @@ class TvSubscriptionsScreen(act: TvActivity) : TvRowsScreen(act, newSince = last
         private const val TAG = "TvSubscriptions"
         private const val PREFS = "tv"
         private const val KEY_SEEN = "subs_seen_at"
-        private const val LATEST_COUNT = 24
 
         fun lastSeen(c: Context): OffsetDateTime {
             val ms = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getLong(KEY_SEEN, 0)
@@ -219,13 +212,25 @@ class TvSubscriptionsScreen(act: TvActivity) : TvRowsScreen(act, newSince = last
     }
 }
 
-/** Splits mixed content into one shelf per source; nothing when it all came from one source. */
-fun bySource(items: List<IPlatformContent>): List<TvRow> {
+/**
+ * A lead row, then one shelf per source holding everything the lead row doesn't show, so every
+ * loaded video stays reachable and none appears twice. With a single source it is one row.
+ * [chronological] keeps the lead in feed order (Subscriptions); otherwise it round-robins sources.
+ */
+fun leadAndShelves(title: String, items: List<IPlatformContent>, chronological: Boolean): List<TvRow> {
+    val groups = items.groupBy { it.id.pluginId }
+    if (groups.size <= 1) return listOf(TvRow(title, hero = true, load = { items }))
+    val lead = if (chronological) items.take(LEAD_COUNT) else TvHomeScreen.interleave(groups.values.map { it.take(4) })
+    val leadUrls = lead.map { it.url }.toSet()
     val clients = StatePlatform.instance.getAvailableClients().associateBy { it.id }
-    val groups = items.groupBy { it.id.pluginId }.filter { (id, list) -> id != null && list.size > 1 && clients[id] != null }
-    if (groups.size < 2) return listOf()
-    return groups.map { (id, list) -> clients.getValue(id!!).let { c -> TvRow(c.name, icon = c.icon, load = { list }) } }
+    return listOf(TvRow(title, hero = true, load = { lead })) + groups.mapNotNull { (id, list) ->
+        val rest = list.filter { it.url !in leadUrls }
+        val c = id?.let { clients[it] }
+        if (rest.isEmpty()) null else TvRow(c?.name ?: "More", icon = c?.icon, load = { rest })
+    }
 }
+
+private const val LEAD_COUNT = 24
 
 class TvSearchScreen(act: TvActivity) : TvRowsScreen(act, header = LayoutInflater.from(act).inflate(R.layout.tv_header_search, null)) {
     override val tab = TvActivity.TAB_SEARCH
@@ -259,10 +264,16 @@ class TvSearchScreen(act: TvActivity) : TvRowsScreen(act, header = LayoutInflate
                 }
                 if (q != lastQuery) return@launch
                 val first = pager.getResults().filter(TvRowsAdapter::playable)
+                val results = when {
+                    first.isEmpty() -> listOf()
+                    // One source: a single row that keeps paging.
+                    first.map { it.id.pluginId }.distinct().size == 1 -> listOf(TvRow(string(R.string.tv_row_results), hero = true, load = { pager }))
+                    else -> leadAndShelves(string(R.string.tv_row_results), first, chronological = false)
+                }
                 val rows = mutableListOf<TvRow>()
-                if (first.isNotEmpty()) rows.add(TvRow(string(R.string.tv_row_results), hero = true, load = { pager }))
+                rows.addAll(results.take(1))
                 if (creators.isNotEmpty()) rows.add(TvRow(string(R.string.tv_row_creators), creators = creators.map { TvCreator(it.name, it.url, it.thumbnail, pluginId = it.id.pluginId) }))
-                rows.addAll(bySource(first))
+                rows.addAll(results.drop(1))
                 if (rows.isEmpty()) {
                     showRows(listOf())
                     showMessage(string(R.string.tv_search_none, q), keepHeader = true)
@@ -276,7 +287,8 @@ class TvSearchScreen(act: TvActivity) : TvRowsScreen(act, header = LayoutInflate
     }
 
     override fun onShown() {
-        if (lastQuery == null) input.post { input.requestFocus() }
+        // Checked when the post runs: a phone search may arrive in between and must win.
+        input.post { if (lastQuery == null) input.requestFocus() }
     }
 
     companion object { private const val TAG = "TvSearch" }

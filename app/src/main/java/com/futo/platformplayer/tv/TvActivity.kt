@@ -130,6 +130,7 @@ class TvActivity : AppCompatActivity() {
     // Navigation
 
     fun showTab(tab: Int) {
+        currentFocus?.let(::hideKeyboard)
         val screen = tabs.getOrPut(tab) {
             when (tab) {
                 TAB_SUBSCRIPTIONS -> TvSubscriptionsScreen(this)
@@ -296,7 +297,7 @@ class TvActivity : AppCompatActivity() {
     /** Runs on a server thread; the returned text is shown on the phone. */
     private fun onCompanionRequest(request: TvCompanionServer.Request): String {
         val message = when (request) {
-            is TvCompanionServer.Request.Search -> onMain { openSearch(request.query); "Searching for “${request.query}” on your TV" }
+            is TvCompanionServer.Request.Search -> onMain { bringToFront(); openSearch(request.query); "Searching for “${request.query}” on your TV" }
             is TvCompanionServer.Request.Follow -> {
                 require(StatePlatform.instance.hasEnabledChannelClient(request.url)) { getString(R.string.tv_follow_failed) }
                 val channel = try { StatePlatform.instance.getChannelLive(request.url) } catch (e: Throwable) {
@@ -314,17 +315,12 @@ class TvActivity : AppCompatActivity() {
                     startActivity(Intent(this, TvPlayerActivity::class.java).putExtra(TvPlayerActivity.EXTRA_URL, request.url))
                     "Playing on your TV"
                 }
-                StatePlatform.instance.hasEnabledChannelClient(request.url) -> onMain { openChannel(request.url); "Opened the channel on your TV" }
+                StatePlatform.instance.hasEnabledChannelClient(request.url) -> onMain { bringToFront(); openChannel(request.url); "Opened the channel on your TV" }
                 else -> throw IllegalArgumentException("None of your sources can open that link")
             }
             is TvCompanionServer.Request.InstallPlugin -> {
                 val (config, script) = fetchPlugin(request.url)
-                onMain {
-                    // Consent needs the TV's full attention: close the player (singleTask clears it) before asking.
-                    if (!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))
-                        startActivity(Intent(this, TvActivity::class.java))
-                    confirmPlugin(config, script)
-                }
+                onMain { bringToFront(); confirmPlugin(config, script) }
                 "Check your TV to confirm adding ${config.name}"
             }
         }
@@ -339,6 +335,12 @@ class TvActivity : AppCompatActivity() {
         railItems.firstOrNull { it.tag == TAB_PHONE }?.findViewById<View>(R.id.rail_dot)?.visibility = View.VISIBLE
     }
 
+    /** Phone actions that change the TV screen close the player first (singleTask clears it) so they are seen. */
+    private fun bringToFront() {
+        if (!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))
+            startActivity(Intent(this, TvActivity::class.java))
+    }
+
     private fun <T> onMain(block: () -> T): T {
         val result = CompletableDeferred<T>()
         runOnUiThread { try { result.complete(block()) } catch (e: Throwable) { result.completeExceptionally(e) } }
@@ -349,7 +351,7 @@ class TvActivity : AppCompatActivity() {
         val client = ManagedHttpClient().apply { setTimeout(FETCH_TIMEOUT_MS) }
         val config = try {
             client.get(url).use { resp ->
-                val json = resp.body?.string()
+                val json = resp.body?.byteStream()?.use { readCapped(it, MAX_CONFIG_BYTES) }?.toString(Charsets.UTF_8)
                 require(resp.isOk && !json.isNullOrEmpty())
                 SourcePluginConfig.fromJson(json, url)
             }
@@ -470,6 +472,7 @@ class TvActivity : AppCompatActivity() {
         private const val IDLE_CHECK_MS = 60 * 1000L
         private const val FETCH_TIMEOUT_MS = 10_000L
         private const val MAX_SCRIPT_BYTES = 5L * 1024 * 1024
+        private const val MAX_CONFIG_BYTES = 256L * 1024
 
         /** Reads at most [max] bytes; null when the stream is longer. */
         fun readCapped(input: java.io.InputStream, max: Long): ByteArray? {

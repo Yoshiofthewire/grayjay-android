@@ -10,14 +10,16 @@
         android:id="@+id/card_frame"
         android:layout_width="match_parent"
         android:layout_height="126dp"
-        android:background="@drawable/tv_thumb_bg"
         android:duplicateParentState="true"
-        android:foreground="@drawable/tv_card_frame">
+        android:foreground="@drawable/tv_card_frame"
+        android:padding="5dp">
 
+        <!-- The focus ring draws in the 5dp padding, outside the thumbnail, so it reads on light images. -->
         <ImageView
             android:id="@+id/card_thumb"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
+            android:background="@drawable/tv_thumb_bg"
             android:contentDescription="@null"
             android:scaleType="centerCrop" />
 
@@ -26,7 +28,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="top|start"
-            android:layout_margin="8dp"
+            android:layout_margin="13dp"
             android:background="@drawable/tv_chip"
             android:gravity="center_vertical"
             android:orientation="horizontal"
@@ -58,7 +60,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="bottom|end"
-            android:layout_margin="8dp"
+            android:layout_margin="13dp"
             android:background="@drawable/tv_chip"
             android:fontFamily="@font/inter_semibold"
             android:fontFeatureSettings="tnum"
@@ -73,7 +75,7 @@
             android:layout_width="14dp"
             android:layout_height="14dp"
             android:layout_gravity="top|end"
-            android:layout_margin="8dp"
+            android:layout_margin="13dp"
             android:background="@drawable/tv_new_dot"
             android:visibility="gone" />
 
@@ -83,6 +85,9 @@
             android:layout_width="match_parent"
             android:layout_height="3dp"
             android:layout_gravity="bottom"
+            android:layout_marginStart="5dp"
+            android:layout_marginEnd="5dp"
+            android:layout_marginBottom="5dp"
             android:max="1000"
             android:progressDrawable="@drawable/tv_progress"
             android:visibility="gone" />

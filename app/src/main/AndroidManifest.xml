@@ -158,6 +158,7 @@
         </activity>
         <activity
             android:name=".tv.TvActivity"
+            android:windowSoftInputMode="stateAlwaysHidden|adjustNothing"
             android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
             android:exported="true"
             android:launchMode="singleTask"

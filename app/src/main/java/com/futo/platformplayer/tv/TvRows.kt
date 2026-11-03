@@ -166,7 +166,13 @@ class TvRowsAdapter(private val ctx: TvRowsContext, private val header: View? = 
                                 @Suppress("UNCHECKED_CAST")
                                 val p = r as IPager<IPlatformContent>
                                 row.pager = p
-                                p.getResults().filter { playable(it) && it.url !in row.exclude }
+                                var items = p.getResults().filter { playable(it) && it.url !in row.exclude }
+                                // A page that was all duplicates or non-videos must not strand the shelf.
+                                var extra = 0
+                                while (items.isEmpty() && p.hasMorePages() && extra++ < 3) {
+                                    p.nextPage(); items = p.getResults().filter { playable(it) && it.url !in row.exclude }
+                                }
+                                items
                             }
                             is List<*> -> r.filterIsInstance<IPlatformContent>().filter { playable(it) && it.url !in row.exclude }
                             else -> listOf()
@@ -236,10 +242,9 @@ private class VideoAdapter(private val row: TvRow, private val ctx: TvRowsContex
         val v = LayoutInflater.from(parent.context).inflate(R.layout.tv_card_video, parent, false)
         val w = parent.resources.getDimensionPixelSize(if (row.hero) R.dimen.tv_card_hero else R.dimen.tv_card)
         v.layoutParams = v.layoutParams.apply { width = w }
-        v.findViewById<View>(R.id.card_frame).apply {
-            layoutParams = layoutParams.apply { height = w * 9 / 16 }
-            clipToOutline = true
-        }
+        val inset = 2 * parent.resources.getDimensionPixelSize(R.dimen.tv_ring_inset)
+        v.findViewById<View>(R.id.card_frame).apply { layoutParams = layoutParams.apply { height = (w - inset) * 9 / 16 + inset } }
+        v.findViewById<View>(R.id.card_thumb).clipToOutline = true
         return Holder(v)
     }
 
