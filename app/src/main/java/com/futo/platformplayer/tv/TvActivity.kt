@@ -83,12 +83,17 @@ class TvActivity : AppCompatActivity() {
         addRailItem(TAB_HOME, R.drawable.ic_home, R.string.tv_home)
         addRailItem(TAB_SUBSCRIPTIONS, R.drawable.ic_subscriptions, R.string.tv_subscriptions)
         addRailItem(TAB_SEARCH, R.drawable.ic_search, R.string.tv_search)
+        addRailItem(TAB_SOURCES, R.drawable.ic_sources, R.string.tv_sources)
         addRailItem(TAB_PHONE, R.drawable.ic_qr, R.string.tv_phone)
 
         window.decorView.viewTreeObserver.addOnGlobalFocusChangeListener { old, now ->
             val inRail = now != null && isInRail(now)
             // Entering the rail from content lands on the current tab, not the nearest item.
-            if (inRail && (old == null || !isInRail(old))) railItems.firstOrNull { it.isSelected && it !== now }?.let { rail.post { it.requestFocus() } }
+            // Checked again when the post runs: while screens swap, focus can pass through the rail for a moment,
+            // and the new screen must keep the focus it takes.
+            if (inRail && (old == null || !isInRail(old))) railItems.firstOrNull { it.isSelected && it !== now }?.let { item ->
+                rail.post { if (currentFocus?.let(::isInRail) == true) item.requestFocus() }
+            }
             setRailOpen(inRail)
         }
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) { override fun handleOnBackPressed() = back() })
@@ -136,8 +141,11 @@ class TvActivity : AppCompatActivity() {
         }
     }
 
-    /** The source picker: step 1 of first-run setup, or reached later from an empty Home. */
-    fun openSourcePicker(onboarding: Boolean) {
+    private var pickerReturnTab = TAB_HOME
+
+    /** The source picker: step 1 of first-run setup, or reached later from an empty Home or Sources. */
+    fun openSourcePicker(onboarding: Boolean, returnTab: Int = TAB_HOME) {
+        pickerReturnTab = returnTab
         setRailVisible(false)
         stack.lastOrNull()?.onHidden()
         stack.clear()
@@ -154,7 +162,7 @@ class TvActivity : AppCompatActivity() {
         if (onboarding) {
             showTab(TAB_PHONE)
             (tabs[TAB_PHONE] as? TvCompanionScreen)?.showDoneButton()
-        } else showTab(TAB_HOME)
+        } else showTab(pickerReturnTab)
         focusContent()
     }
 
@@ -194,6 +202,7 @@ class TvActivity : AppCompatActivity() {
                 TAB_SUBSCRIPTIONS -> TvSubscriptionsScreen(this)
                 TAB_SEARCH -> TvSearchScreen(this)
                 TAB_PHONE -> TvCompanionScreen(this)
+                TAB_SOURCES -> TvSourceListScreen(this)
                 else -> TvHomeScreen(this)
             }
         }
@@ -214,7 +223,7 @@ class TvActivity : AppCompatActivity() {
         screen.onShown()
     }
 
-    private fun back() {
+    fun back() {
         if (!ready || stack.lastOrNull() is TvSourcesScreen) { finish(); return }
         val focusInRail = currentFocus?.let(::isInRail) == true
         when {
@@ -238,6 +247,14 @@ class TvActivity : AppCompatActivity() {
     }
     fun openCompanion() = showTab(TAB_PHONE)
     fun focusHome() = focusContent()
+
+    fun openSourceDetail(id: String) { push(TvSourceDetailScreen(this, id)); focusContent() }
+
+    /** Sources were turned on/off, removed or reconfigured: rebuild the content tabs next time they show. */
+    fun sourcesChanged() {
+        for (t in listOf(TAB_HOME, TAB_SUBSCRIPTIONS, TAB_SEARCH)) if (stack.none { it === tabs[t] }) tabs.remove(t)?.onDestroyed()
+        (tabs[TAB_HOME] as? TvHomeScreen)?.load()
+    }
 
     /**
      * Logs in to a source with its own login page, full screen on the TV. Typing works with the remote's
@@ -594,6 +611,7 @@ class TvActivity : AppCompatActivity() {
         const val TAB_SUBSCRIPTIONS = 1
         const val TAB_SEARCH = 2
         const val TAB_PHONE = 3
+        const val TAB_SOURCES = 4
         private const val IDLE_TIMEOUT_MS = 15 * 60 * 1000L
         private const val IDLE_CHECK_MS = 60 * 1000L
         private const val FETCH_TIMEOUT_MS = 10_000L

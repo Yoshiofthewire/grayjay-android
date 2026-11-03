@@ -21,6 +21,8 @@ class TvVideoPlayer(context: Context, attrs: AttributeSet? = null) : FutoVideoPl
         playerView.controllerShowTimeoutMs = 4000
         playerView.setShowFastForwardButton(true)
         playerView.setShowRewindButton(true)
+        // Captions follow the size and style chosen in the TV's accessibility settings.
+        playerView.subtitleView?.apply { setUserDefaultStyle(); setUserDefaultTextSize() }
     }
 
     fun attach() {

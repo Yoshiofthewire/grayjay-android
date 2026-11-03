@@ -9,6 +9,11 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.ImageView
+import com.futo.platformplayer.stores.StringStorage
+import com.futo.platformplayer.stores.FragmentedStorage
+import com.futo.platformplayer.api.media.models.subtitles.ISubtitleSource
+import androidx.media3.common.C
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.annotation.OptIn
 import androidx.appcompat.app.AppCompatActivity
@@ -82,6 +87,7 @@ class TvPlayerActivity : AppCompatActivity() {
         findViewById<View>(R.id.tv_player_retry).setOnClickListener { currentUrl?.let(::load) }
         findViewById<View>(R.id.tv_player_next).setOnClickListener { playNext() }
         findViewById<View>(R.id.tv_player_back).setOnClickListener { finish() }
+        player.playerView.findViewById<View>(R.id.tv_controls_settings)?.setOnClickListener { openSettings() }
 
         player.attach()
         player.exoPlayer?.player?.addListener(listener)
@@ -99,6 +105,8 @@ class TvPlayerActivity : AppCompatActivity() {
 
     private fun load(url: String) {
         currentUrl = url
+        subtitle = null
+        closeSettings()
         // The previous video stops now, so its end or errors can't act on the replacement.
         video = null
         player.exoPlayer?.player?.stop()
@@ -120,13 +128,18 @@ class TvPlayerActivity : AppCompatActivity() {
                 if (details.isLive && details.live != null) {
                     player.setSource(details.live, null, play = true)
                 } else {
-                    val v = VideoHelper.selectBestVideoSource(details.video, Settings.instance.playback.getCurrentPreferredQualityPixelCount(), FutoVideoPlayerBase.PREFERED_VIDEO_CONTAINERS)
-                    val a = VideoHelper.selectBestAudioSource(details.video, FutoVideoPlayerBase.PREFERED_AUDIO_CONTAINERS, Settings.instance.playback.getPrimaryLanguage(this@TvPlayerActivity))
+                    // Same choice as the phone: DASH/HLS when there is no plain file, else the best file near the preferred quality.
+                    val v = player.getPreferredVideoSource(details, Settings.instance.playback.getCurrentPreferredQualityPixelCount())
+                    val a = player.getPreferredAudioSource(details, Settings.instance.playback.getPrimaryLanguage(this@TvPlayerActivity))
                     require(v != null || a != null) { "no playable source" }
                     val resumeSec = StateHistory.instance.getHistoryPosition(details.url)
                     val resume = resumeSec > 10 && (details.duration <= 0 || resumeSec < details.duration - 30)
                     player.setSource(v, a, play = true, resume = resume)
                     if (resume) player.seekTo(resumeSec * 1000)
+                }
+                // "Sticky subtitles" (a phone setting): bring back the last caption language.
+                if (Settings.instance.playback.stickySubtitles) subtitleLanguage.value.takeIf { it.isNotEmpty() }?.let { lang ->
+                    player.getPreferredSubtitleSource(details, lang)?.let { player.swapSubtitles(it); subtitle = it }
                 }
                 player.playerView.showController()
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -174,6 +187,7 @@ class TvPlayerActivity : AppCompatActivity() {
         (next as? com.futo.platformplayer.api.media.models.video.IPlatformVideo)?.thumbnails?.getHQThumbnail()?.let {
             Glide.with(this).load(it).into(findViewById<ImageView>(R.id.tv_upnext_thumb))
         }
+        panel.visibility = View.GONE
         player.playerView.hideController()
         player.playerView.useController = false
         upNext.visibility = View.VISIBLE
@@ -207,6 +221,10 @@ class TvPlayerActivity : AppCompatActivity() {
     // Keys
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (panel.visibility == View.VISIBLE) {
+            if (event.keyCode == KeyEvent.KEYCODE_BACK) { if (event.action == KeyEvent.ACTION_UP) panelBack(); return true }
+            return super.dispatchKeyEvent(event)
+        }
         if (findViewById<View>(R.id.tv_player_actions).visibility == View.VISIBLE) return super.dispatchKeyEvent(event)
         if (event.action == KeyEvent.ACTION_DOWN && upNext.visibility != View.VISIBLE) {
             val exo = player.exoPlayer?.player
@@ -276,6 +294,90 @@ class TvPlayerActivity : AppCompatActivity() {
         player.exoPlayer?.player?.removeListener(listener)
         player.exoPlayer?.player?.stop()
         player.detach()
+    }
+
+    // Quality and captions panel
+
+    private val panel: View by lazy { findViewById(R.id.tv_settings_panel) }
+    private val panelList: LinearLayout by lazy { findViewById(R.id.tv_settings_list) }
+    private val subtitleLanguage = FragmentedStorage.get<StringStorage>("subtitleLanguage")
+    private var subtitle: ISubtitleSource? = null
+    private var panelPage = 0
+
+    private class Option(val label: String, val selected: Boolean, val apply: suspend () -> Unit)
+
+    private fun openSettings() {
+        if (video == null) return
+        player.playerView.hideController()
+        player.playerView.useController = false
+        panel.visibility = View.VISIBLE
+        showSettingsRoot()
+    }
+
+    private fun closeSettings() {
+        if (panel.visibility != View.VISIBLE) return
+        panel.visibility = View.GONE
+        player.playerView.useController = true
+        player.playerView.showController()
+        player.playerView.findViewById<View>(R.id.tv_controls_settings)?.requestFocus()
+    }
+
+    private fun panelBack() = if (panelPage != 0) showSettingsRoot() else closeSettings()
+
+    private fun showSettingsRoot() {
+        panelPage = 0
+        findViewById<TextView>(R.id.tv_settings_title).setText(R.string.tv_player_settings)
+        panelList.removeAllViews()
+        val quality = qualityOptions()
+        val first = panelList.addChoiceRow(TvChoice(getString(R.string.tv_quality), value = quality.firstOrNull { it.selected }?.label ?: getString(R.string.tv_auto)), false) { showOptions(R.string.tv_quality, quality, R.string.tv_quality_none) }
+        panelList.addChoiceRow(TvChoice(getString(R.string.tv_captions), value = subtitle?.name ?: getString(R.string.tv_off)), false) { showOptions(R.string.tv_captions, captionOptions(), R.string.tv_captions_none) }
+        first.post { first.requestFocus() }
+    }
+
+    private fun showOptions(title: Int, options: List<Option>, empty: Int) {
+        panelPage = 1
+        findViewById<TextView>(R.id.tv_settings_title).setText(title)
+        panelList.removeAllViews()
+        if (options.size <= 1) panelList.addView(TextView(this).apply { setTextAppearance(R.style.TvText_Body); setText(empty) })
+        val rows = options.map { o -> panelList.addChoiceRow(TvChoice(o.label, selected = o.selected), true) {
+            lifecycleScope.launch { try { o.apply() } catch (e: Throwable) { Logger.e(TAG, "Applying ${o.label} failed", e) }; showSettingsRoot() }
+        } }
+        (rows.getOrNull(options.indexOfFirst { it.selected }) ?: rows.firstOrNull())?.let { r -> r.post { r.requestFocus() } }
+    }
+
+    /**
+     * Plain video files: pick another file at that height, keeping position and captions.
+     * Streams (HLS/DASH, live): limit the player's adaptive choice to one height, or let it pick (Auto).
+     */
+    private fun qualityOptions(): List<Option> {
+        val d = video ?: return listOf()
+        val current = player.lastVideoSource
+        val files = d.video.videoSources.toList()
+        if (!d.isLive && current != null && current in files) {
+            return files.filter { it.height > 0 }.groupBy { it.height }.toSortedMap(compareByDescending { it })
+                .mapNotNull { (h, list) -> VideoHelper.selectBestVideoSource(list, -1, FutoVideoPlayerBase.PREFERED_VIDEO_CONTAINERS)?.let { h to it } }
+                .map { (h, src) -> Option("${h}p", current.height == h) { player.swapSources(src, player.lastAudioSource, resume = true, play = true, keepSubtitles = true) } }
+        }
+        val exo = player.exoPlayer?.player
+        val heights = exo?.currentTracks?.groups.orEmpty().filter { it.type == C.TRACK_TYPE_VIDEO }
+            .flatMap { g -> (0 until g.length).map { g.getTrackFormat(it).height } }.filter { it > 0 }.distinct().sortedDescending()
+        val target = player.targetTrackVideoHeight
+        val playing = exo?.videoFormat?.height?.takeIf { it > 0 }
+        val auto = Option(if (target <= 0 && playing != null) getString(R.string.tv_auto_now, "${playing}p") else getString(R.string.tv_auto), target <= 0) { player.selectVideoTrack(-1) }
+        return listOf(auto) + heights.map { h -> Option("${h}p", target == h) { player.selectVideoTrack(h) } }
+    }
+
+    private fun captionOptions(): List<Option> {
+        val d = video ?: return listOf()
+        val tracks = d.subtitles.filter { it.format?.lowercase() in FutoVideoPlayerBase.SUPPORTED_SUBTITLES }
+        val off = Option(getString(R.string.tv_off), subtitle == null) { setSubtitle(null) }
+        return listOf(off) + tracks.map { t -> Option(t.name, subtitle?.url == t.url && subtitle?.name == t.name) { setSubtitle(t) } }
+    }
+
+    private suspend fun setSubtitle(s: ISubtitleSource?) {
+        player.swapSubtitles(s)
+        subtitle = s
+        subtitleLanguage.setAndSave(s?.language ?: "")
     }
 
     companion object {

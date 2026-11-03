@@ -16,8 +16,10 @@ remote, with a phone page for anything that needs typing.
   New uploads carry a blue dot until you have looked at them.
 - **Search** across all your sources, with creators and a shelf per source.
 - **Channel pages** with a Follow button.
-- **Full-screen player**: OK plays and pauses, Left and Right skip 10 seconds, *Go to channel*, and an
-  *Up next* countdown.
+- **Full-screen player**: OK plays and pauses, Left and Right skip 10 seconds, *Go to channel*, an
+  *Up next* countdown, and a settings panel for quality and captions. Your caption language is remembered.
+- **Sources**: turn sources on or off, change their settings, log in or out, and remove sources you added.
+  Built-in sources can be turned off but not removed.
 - **Use your phone**: scan a QR code on the TV to open a page on your phone. From there you can follow
   creators, search, send a link to play, or add a source (paste its link or scan its QR code).
 - **First-run setup**: pick your sources from the official list at
@@ -92,9 +94,8 @@ on the TV.
 
 ## Not on the TV yet
 
-- Source settings, removing sources, library, playlists, downloads, comments and sync are still only in the
-  phone app.
-- Captions, quality and playback speed controls in the player.
+- Library, playlists, downloads, comments and sync are still only in the phone app.
+- Playback speed and audio track choice in the player.
 - Links and shares opened on the TV use the phone interface.
 
 ## What this fork changes
