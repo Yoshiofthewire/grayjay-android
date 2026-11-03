@@ -30,6 +30,7 @@
     <string name="tv_search_phone">Type on phone</string>
     <string name="tv_load_failed_title">Couldn\'t load this</string>
     <string name="tv_retry">Try again</string>
+    <string name="tv_load_more">Load more</string>
     <string name="tv_go_to_channel">Go to channel</string>
     <string name="tv_player_next">Play next</string>
     <string name="tv_player_back">Back</string>

@@ -57,6 +57,9 @@ class TvRow(
     var allShownElsewhere = false
     /** The last next-page request failed; the shelf ends in a "Try again" tile. */
     var moreFailed = false
+    /** A long run of shorts/posts hit the skip limit with pages left; the shelf ends in "Load more". */
+    var moreStalled = false
+    val hasTail get() = moreFailed || moreStalled
     internal var adapter: RecyclerView.Adapter<*>? = null
 }
 
@@ -137,6 +140,8 @@ class TvRowsAdapter(private val ctx: TvRowsContext, private val header: View? = 
 
         private fun retry(row: TvRow) {
             row.started = false
+            row.moreFailed = false
+            row.moreStalled = false
             row.state = TvRow.State.LOADING
             row.selected = 0
             val i = rows.indexOf(row)
@@ -151,7 +156,7 @@ class TvRowsAdapter(private val ctx: TvRowsContext, private val header: View? = 
                 TvRow.State.READY -> {
                     val newCount = row.videos.count { isNew(it, ctx) }
                     when {
-                        row.creators == null && row.videos.isEmpty() -> r.getString(R.string.tv_row_empty)
+                        row.creators == null && row.videos.isEmpty() && !row.moreStalled -> r.getString(R.string.tv_row_empty)
                         newCount > 0 && ctx.newSince != null -> r.getString(R.string.tv_new_count, newCount)
                         else -> ""
                     }
@@ -173,6 +178,7 @@ class TvRowsAdapter(private val ctx: TvRowsContext, private val header: View? = 
                                 row.pager = p
                                 val (items, sawPlayable) = nextVideos(p, row, fetchFirst = false)
                                 row.allShownElsewhere = items.isEmpty() && sawPlayable && !p.hasMorePages()
+                                row.moreStalled = items.isEmpty() && p.hasMorePages()
                                 items
                             }
                             is List<*> -> r.filterIsInstance<IPlatformContent>().filter { playable(it) && it.url !in row.exclude }
@@ -198,7 +204,7 @@ class TvRowsAdapter(private val ctx: TvRowsContext, private val header: View? = 
 
     internal fun loadMore(row: TvRow) {
         val pager = row.pager ?: return
-        if (row.loadingMore || row.moreFailed || !pager.hasMorePages()) return
+        if (row.loadingMore || row.hasTail || !pager.hasMorePages()) return
         row.loadingMore = true
         ctx.scope.launch(Dispatchers.Main) {
             try {
@@ -206,6 +212,10 @@ class TvRowsAdapter(private val ctx: TvRowsContext, private val header: View? = 
                 val start = row.videos.size
                 row.videos.addAll(more)
                 row.adapter?.notifyItemRangeInserted(start, more.size)
+                if (more.isEmpty() && pager.hasMorePages()) {
+                    row.moreStalled = true
+                    row.adapter?.notifyItemInserted(row.videos.size)
+                }
             } catch (e: Throwable) {
                 Logger.w(TAG, "Row '${row.title}' next page failed", e)
                 row.moreFailed = true
@@ -218,6 +228,7 @@ class TvRowsAdapter(private val ctx: TvRowsContext, private val header: View? = 
 
     internal fun retryMore(row: TvRow) {
         row.moreFailed = false
+        row.moreStalled = false
         row.adapter?.notifyItemRemoved(row.videos.size)
         loadMore(row)
     }
@@ -267,7 +278,7 @@ private class RetryAdapter(private val onRetry: () -> Unit) : RecyclerView.Adapt
 private class VideoAdapter(private val row: TvRow, private val ctx: TvRowsContext, private val rows: TvRowsAdapter) :
     RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
-    override fun getItemCount() = row.videos.size + if (row.moreFailed) 1 else 0
+    override fun getItemCount() = row.videos.size + if (row.hasTail) 1 else 0
     override fun getItemViewType(position: Int) = if (position >= row.videos.size) TYPE_RETRY else TYPE_VIDEO
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
@@ -283,7 +294,11 @@ private class VideoAdapter(private val row: TvRow, private val ctx: TvRowsContex
     }
 
     override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
-        if (holder !is Holder) { holder.itemView.setOnClickListener { rows.retryMore(row) }; return }
+        if (holder !is Holder) {
+            (holder.itemView as TextView).setText(if (row.moreFailed) R.string.tv_retry else R.string.tv_load_more)
+            holder.itemView.setOnClickListener { rows.retryMore(row) }
+            return
+        }
         holder.bind(row.videos[position])
         if (position >= row.videos.size - 4) rows.loadMore(row)
     }

@@ -236,11 +236,16 @@ fun mixedSourceRows(
     // What the mixed row actually displays. Replaced whole, never mutated, so other threads read a complete set.
     val shown = java.util.concurrent.atomic.AtomicReference(emptySet<String>())
     var mixedAttempts = 0
-    val mixedRow = TvRow(mixedTitle, hero = true, load = {
+    lateinit var mixedRow: TvRow
+    mixedRow = TvRow(mixedTitle, hero = true, load = {
         val retry = mixedAttempts++ > 0
         val pages = clients.mapNotNull { c -> runCatching { lead(page(c, retry).second) }.getOrNull() }
         check(pages.isNotEmpty()) { "every source failed" }
-        TvHomeScreen.interleave(pages).also { items -> shown.set(items.map { it.url }.toSet()) }
+        TvHomeScreen.interleave(pages).also { items ->
+            shown.set(items.map { it.url }.toSet())
+            // Every first page was shorts or posts: the shelves below carry on, so the empty mixed row drops out.
+            mixedRow.allShownElsewhere = items.isEmpty()
+        }
     })
     val shelves = clients.map { c ->
         lateinit var row: TvRow
